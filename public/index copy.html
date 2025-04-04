@@ -1,0 +1,2953 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LoreVision Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link
+      href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <style>
+      /* Add enhanced styling for the dashboard */
+      :root {
+        --bg-color: #0a0a16;
+        --card-bg: #10101e;
+        --card-border: #1f1f3a;
+        --accent-color: #ff8c00;
+        --accent-light: rgba(255, 140, 0, 0.1);
+        --accent-medium: rgba(255, 140, 0, 0.3);
+        --success-color: #22cc88;
+        --warning-color: #ffbb33;
+        --error-color: #ff3355;
+        --checking-color: #0099aa;
+        --tweeted-color: #3366ff;
+        --text-primary: #ffffff;
+        --text-secondary: rgba(255, 255, 255, 0.7);
+        --font-mono: "JetBrains Mono", "Roboto Mono", monospace;
+        --font-main: "Inter", system-ui, -apple-system, BlinkMacSystemFont,
+          sans-serif;
+      }
+
+      body {
+        background-color: var(--bg-color);
+        color: var(--text-primary);
+        font-family: var(--font-main);
+        margin: 0;
+        padding: 0;
+        line-height: 1.5;
+        height: 100vh;
+        overflow: hidden;
+        letter-spacing: 0.3px;
+      }
+
+      /* Enhanced card styling */
+      .card {
+        background-color: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 10px;
+        overflow: hidden;
+        position: relative;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(
+          to right,
+          transparent,
+          var(--accent-color),
+          transparent
+        );
+        opacity: 0.5;
+      }
+
+      .card-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: linear-gradient(
+          to right,
+          rgba(31, 31, 58, 0.7),
+          rgba(31, 31, 58, 0.3)
+        );
+        border-bottom: 1px solid var(--card-border);
+      }
+
+      .card-title h2 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        color: var(--accent-color);
+        text-transform: uppercase;
+        text-shadow: 0 0 8px rgba(255, 140, 0, 0.2);
+      }
+
+      .card-content {
+        padding: 12px;
+        overflow: auto;
+        flex: 1;
+      }
+
+      /* Enhanced buttons */
+      .refresh-button,
+      .clear-button {
+        color: var(--accent-color);
+        border: 1px solid var(--accent-color);
+        background: transparent;
+        padding: 6px 12px;
+        font-size: 12px;
+        text-transform: uppercase;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-weight: 600;
+        letter-spacing: 0.8px;
+      }
+
+      .refresh-button:hover,
+      .clear-button:hover {
+        background: var(--accent-light);
+        box-shadow: 0 0 12px rgba(255, 140, 0, 0.3);
+        transform: translateY(-1px);
+      }
+
+      .refresh-button:active,
+      .clear-button:active {
+        transform: translateY(1px);
+        box-shadow: 0 0 6px rgba(255, 140, 0, 0.2);
+      }
+
+      .refresh-button {
+        margin-right: 8px;
+      }
+
+      /* Enhanced token table styling */
+      .token-activity table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
+      }
+
+      .token-activity th {
+        text-align: left;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-color);
+        letter-spacing: 0.5px;
+        border-bottom: 1px solid var(--card-border);
+        position: sticky;
+        top: 0;
+        background-color: var(--card-bg);
+        z-index: 2;
+      }
+
+      .token-activity td {
+        padding: 12px;
+        font-size: 13px;
+        border-bottom: 1px solid rgba(31, 31, 58, 0.3);
+        vertical-align: middle;
+      }
+
+      .token-activity tr:nth-child(even) {
+        background-color: rgba(31, 31, 58, 0.2);
+      }
+
+      .token-activity tr:hover {
+        background-color: rgba(31, 31, 58, 0.4);
+      }
+
+      /* Token status styling */
+      .status {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        text-align: center;
+        min-width: 80px;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .status::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          to bottom right,
+          rgba(255, 255, 255, 0.1),
+          transparent
+        );
+        opacity: 0.3;
+      }
+
+      .status.status-online {
+        background: linear-gradient(to bottom right, #22cc88, #22aa77);
+        color: white;
+        border: none;
+      }
+
+      .status.status-checking {
+        background: linear-gradient(to bottom right, #118899, #006677);
+        color: white;
+        border: none;
+        animation: pulse 1.5s infinite;
+      }
+
+      .status.status-error,
+      .status.status-failed {
+        background: linear-gradient(to bottom right, #ff3355, #dd1133);
+        color: white;
+        border: none;
+      }
+
+      .status.status-already-tweeted {
+        background: linear-gradient(to bottom right, #3366ff, #1144cc);
+        color: white;
+        border: none;
+      }
+
+      .status.status-pending {
+        background: linear-gradient(to bottom right, #777788, #555566);
+        color: white;
+        border: none;
+      }
+
+      /* Improved token info styling */
+      .token-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 4px 0;
+      }
+
+      .token-logo-container {
+        position: relative;
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+      }
+
+      .token-logo {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background-color: #232338;
+        border: 2px solid rgba(255, 140, 0, 0.5);
+        object-fit: cover;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+
+      .token-logo-placeholder {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background-color: #232338;
+        border: 2px solid rgba(255, 140, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        color: white;
+        font-weight: 600;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+
+      .token-name {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .token-symbol {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 14px;
+        line-height: 1.2;
+      }
+
+      .token-full-name {
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 160px;
+        letter-spacing: 0.2px;
+      }
+
+      /* Address container styling */
+      .address-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .address-cell {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        background-color: rgba(31, 31, 58, 0.3);
+        padding: 4px 8px;
+        border-radius: 4px;
+        color: var(--text-secondary);
+      }
+
+      .copy-button {
+        background: rgba(255, 140, 0, 0.1);
+        color: var(--accent-color);
+        border: 1px solid var(--accent-color);
+        padding: 3px 7px;
+        font-size: 11px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .copy-button:hover {
+        background: rgba(255, 140, 0, 0.2);
+        box-shadow: 0 0 8px rgba(255, 140, 0, 0.3);
+      }
+
+      /* Enhanced system status styling */
+      .system-status .card-content {
+        padding: 15px;
+      }
+
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        background-color: rgba(31, 31, 58, 0.2);
+        border-radius: 6px;
+        border-left: 3px solid var(--accent-color);
+      }
+
+      .service-connected {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .live-indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: var(--success-color);
+        margin-right: 8px;
+        position: relative;
+        display: inline-block;
+        box-shadow: 0 0 8px var(--success-color);
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(34, 204, 136, 0.7);
+        }
+        70% {
+          box-shadow: 0 0 0 6px rgba(34, 204, 136, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(34, 204, 136, 0);
+        }
+      }
+
+      /* System metrics styling */
+      .system-metrics {
+        margin-top: 20px;
+        border-top: 1px solid rgba(255, 140, 0, 0.2);
+        padding-top: 15px;
+      }
+
+      .metrics-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 8px 12px;
+        background-color: rgba(31, 31, 58, 0.2);
+        border-radius: 6px;
+        border-left: 3px solid var(--accent-color);
+        transition: all 0.2s ease;
+      }
+
+      .metrics-row:hover {
+        background-color: rgba(31, 31, 58, 0.3);
+        transform: translateX(2px);
+      }
+
+      .metric-label {
+        color: var(--accent-color);
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .metric-value {
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+        font-size: 13px;
+      }
+
+      /* System logs styling */
+      .system-logs tbody td {
+        padding: 8px 12px;
+        font-size: 13px;
+        border-bottom: 1px solid rgba(31, 31, 58, 0.3);
+      }
+
+      .system-logs tr:nth-child(even) {
+        background-color: rgba(31, 31, 58, 0.2);
+      }
+
+      .system-logs tr:hover {
+        background-color: rgba(31, 31, 58, 0.4);
+      }
+
+      /* Update scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: rgba(31, 31, 58, 0.2);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 140, 0, 0.3);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 140, 0, 0.5);
+      }
+
+      /* Header styling */
+      .dashboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 20px;
+        background-color: var(--card-bg);
+        border-radius: 8px;
+        border: 1px solid var(--card-border);
+        margin-bottom: 15px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+
+      .dashboard-header .logo {
+        font-weight: 700;
+        font-size: 22px;
+        color: var(--accent-color);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+
+      .dashboard-header .header-right {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+
+      .latest-token-display {
+        display: flex;
+        align-items: center;
+        background: rgba(31, 31, 58, 0.3);
+        padding: 8px 15px;
+        border-radius: 6px;
+        border: 1px solid var(--card-border);
+      }
+
+      .latest-label {
+        color: var(--accent-color);
+        font-size: 12px;
+        margin-right: 10px;
+        font-weight: 600;
+      }
+
+      .tweeted-badge {
+        background: rgba(255, 140, 0, 0.2);
+        color: var(--accent-color);
+        padding: 3px 8px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        border-radius: 4px;
+        margin-left: 10px;
+        letter-spacing: 0.5px;
+      }
+
+      .stop-agent-button {
+        background: linear-gradient(to bottom, #ff3355, #dd1133);
+        color: white;
+        border: none;
+        padding: 8px 15px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        box-shadow: 0 2px 6px rgba(255, 51, 85, 0.3);
+        transition: all 0.2s ease;
+      }
+
+      .stop-agent-button:hover {
+        background: linear-gradient(to bottom, #ff4466, #ee2244);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(255, 51, 85, 0.4);
+      }
+
+      .stop-agent-button:active {
+        transform: translateY(1px);
+        box-shadow: 0 2px 4px rgba(255, 51, 85, 0.3);
+      }
+
+      .last-scan-display {
+        display: flex;
+        align-items: center;
+        background: rgba(31, 31, 58, 0.3);
+        padding: 8px 15px;
+        border-radius: 6px;
+        border: 1px solid var(--card-border);
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .last-scan-label {
+        margin-right: 5px;
+        font-weight: 600;
+      }
+
+      .last-scan-time {
+        font-family: var(--font-mono);
+      }
+
+      /* Update root variables for enhanced metallic purple effect */
+      :root {
+        --primary-bg: #000000;
+        --secondary-bg: #0a0a0a;
+        --accent-color: #9333ea; /* Dark purple */
+        --accent-glow: #c084fc; /* Light purple */
+        --accent-dim: #6b21a8; /* Darker purple */
+        --metal-highlight: #d8b4fe; /* Very light purple for metallic effect */
+        --text-primary: #ffffff;
+        --text-secondary: #ffffff;
+        --error-color: #ff0000;
+        --warning-color: #ffcc00;
+        --info-color: #00ccff;
+        --chart-color: #0088ff;
+        --chart-bg: rgba(0, 136, 255, 0.1);
+        --glow-strength: rgba(147, 51, 234, 0.3); /* Purple glow */
+        --font-mono: "Courier New", monospace;
+        --font-display: "OCR A Extended", "VT323", "Courier New", monospace;
+        --border-weight: 1px;
+      }
+
+      /* Enhanced metallic shine animation for borders */
+      @keyframes metallic-shine {
+        0% {
+          box-shadow: 0 0 5px rgba(147, 51, 234, 0.5),
+            inset 0 0 2px rgba(147, 51, 234, 0.3);
+          border-image: linear-gradient(45deg, #9333ea, #d8b4fe, #9333ea) 1;
+        }
+        25% {
+          box-shadow: 0 0 10px rgba(147, 51, 234, 0.7),
+            inset 0 0 3px rgba(147, 51, 234, 0.5);
+          border-image: linear-gradient(90deg, #c084fc, #9333ea, #c084fc) 1;
+        }
+        50% {
+          box-shadow: 0 0 15px rgba(147, 51, 234, 0.9),
+            inset 0 0 5px rgba(147, 51, 234, 0.7);
+          border-image: linear-gradient(135deg, #9333ea, #d8b4fe, #9333ea) 1;
+        }
+        75% {
+          box-shadow: 0 0 10px rgba(147, 51, 234, 0.7),
+            inset 0 0 3px rgba(147, 51, 234, 0.5);
+          border-image: linear-gradient(180deg, #c084fc, #9333ea, #c084fc) 1;
+        }
+        100% {
+          box-shadow: 0 0 5px rgba(147, 51, 234, 0.5),
+            inset 0 0 2px rgba(147, 51, 234, 0.3);
+          border-image: linear-gradient(225deg, #9333ea, #d8b4fe, #9333ea) 1;
+        }
+      }
+
+      /* Update existing shimmer animation to use the new metallic-shine */
+      @keyframes shimmer {
+        0%,
+        100% {
+          box-shadow: 0 0 5px var(--glow-strength);
+          border-image: linear-gradient(45deg, #9333ea, #d8b4fe, #9333ea) 1;
+        }
+        50% {
+          box-shadow: 0 0 12px var(--glow-strength);
+          border-image: linear-gradient(135deg, #9333ea, #d8b4fe, #9333ea) 1;
+        }
+      }
+
+      /* Apply enhanced animation to all cards */
+      .card {
+        animation: metallic-shine 4s infinite;
+        border: var(--border-weight) solid transparent;
+        background-color: var(--primary-bg);
+        padding: 10px;
+        margin: 0;
+        position: relative;
+        overflow: hidden;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Update the header with metallic animation */
+      .dashboard-header {
+        animation: metallic-shine 4s infinite;
+        border: var(--border-weight) solid transparent;
+      }
+
+      /* Fix card title styles */
+      .card-title h2 {
+        margin: 0;
+        padding: 0 0 10px 0;
+        font-size: 18px;
+        letter-spacing: 2px;
+        color: var(--accent-color);
+        text-transform: uppercase;
+      }
+
+      /* Style for MongoDB Status card */
+      .mongodb-status .card-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .mongodb-status .entry-badge {
+        background-color: var(--accent-dim);
+        color: var(--text-primary);
+        font-size: 12px;
+        padding: 3px 8px;
+        border-radius: 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      /* Update text color for all elements */
+      body,
+      h1,
+      h2,
+      h3,
+      td,
+      th,
+      p,
+      span,
+      div {
+        color: var(--text-primary);
+      }
+
+      /* Header styling with MongoDB latest entry */
+      .dashboard-header {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-gap: 20px;
+        align-items: center;
+        padding: 15px;
+        background-color: var(--primary-bg);
+        animation: metallic-shine 4s infinite;
+        border: var(--border-weight) solid transparent;
+        margin-bottom: 20px;
+      }
+
+      /* Improved MongoDB entry display in header with larger font sizes */
+      .header-mongo-entry {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        background-color: rgba(0, 0, 0, 0.5);
+        border: var(--border-weight) solid var(--accent-color);
+        padding: 8px 12px;
+        border-radius: 0;
+        font-family: var(--font-mono);
+        max-height: 44px;
+        overflow: hidden;
+        gap: 10px;
+      }
+
+      .header-mongo-entry .mongo-label {
+        color: var(--accent-color);
+        font-weight: bold;
+        font-size: 16px; /* Increased from 12px */
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-right: 5px;
+      }
+
+      .header-mongo-entry .mongo-value {
+        color: var(--text-primary);
+        font-size: 16px; /* Increased from 12px */
+        white-space: nowrap;
+        font-weight: bold;
+      }
+
+      .mongo-details {
+        display: flex;
+        align-items: center;
+        font-size: 14px; /* Increased from 12px */
+        color: var(--text-secondary);
+        gap: 12px; /* Increased spacing */
+      }
+
+      .entry-badge {
+        background-color: var(--accent-dim);
+        color: var(--text-primary);
+        font-size: 13px; /* Increased from 11px */
+        padding: 3px 8px;
+        border-radius: 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-left: 8px;
+      }
+
+      .mongo-address {
+        font-family: var(--font-mono);
+        font-size: 13px; /* Increased from 11px */
+        color: rgba(255, 255, 255, 0.8); /* Slightly brighter */
+        background-color: rgba(0, 0, 0, 0.3);
+        padding: 3px 8px;
+        border-radius: 0;
+        white-space: nowrap;
+      }
+
+      .entry-badge {
+        background-color: var(--accent-dim);
+        color: var(--text-primary);
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-left: 8px;
+      }
+
+      /* Adjust chart colors for blue theme */
+      #systemMetricsChart,
+      #performanceChart {
+        filter: none;
+      }
+
+      /* Update chart configuration to use blue instead of green */
+      .chart-blue-theme {
+        --chart-line-color: #0088ff;
+        --chart-fill-color: rgba(0, 136, 255, 0.1);
+        --chart-point-color: #00ccff;
+        --chart-grid-color: rgba(255, 255, 255, 0.1);
+        --chart-text-color: #ffffff;
+      }
+
+      /* Fix any specific elements that need accent colors preserved */
+      .status-online {
+        color: var(--accent-color);
+        border-color: var(--accent-color);
+        background-color: rgba(147, 51, 234, 0.1);
+      }
+
+      /* Ensure scrollbars match the new theme */
+      .scrollable-table::-webkit-scrollbar-thumb {
+        background: var(--accent-color);
+      }
+
+      /* Ensure buttons have proper styling */
+      button {
+        color: var(--accent-color);
+        border-color: var(--accent-color);
+      }
+
+      /* Text styling for terminal look */
+      h1,
+      h2 {
+        font-family: var(--font-display);
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin: 0;
+        color: var(--accent-color);
+        text-shadow: 0 0 5px var(--glow-strength);
+      }
+
+      h1 {
+        font-size: 28px;
+        font-weight: bold;
+        letter-spacing: 3px;
+      }
+
+      h2 {
+        font-size: 20px;
+        font-weight: bold;
+        letter-spacing: 2px;
+      }
+
+      /* Enhanced status row styling */
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(0, 255, 0, 0.1);
+      }
+
+      /* Enhanced status indicators */
+      .status {
+        padding: 3px 8px;
+        font-size: 12px;
+        font-weight: bold;
+        border: 1px solid currentColor;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 0 0 5px rgba(0, 255, 0, 0.2);
+        position: relative;
+        cursor: default;
+        min-width: 100px;
+        text-align: center;
+        display: inline-block;
+      }
+
+      /* Specific status colors and styling */
+      .status.status-pending {
+        background-color: rgba(100, 116, 139, 0.2);
+        color: #94a3b8;
+        border-color: #64748b;
+      }
+
+      .status.status-success,
+      .status.status-posted {
+        background-color: rgba(147, 51, 234, 0.2);
+        color: var(--accent-color);
+        border-color: var(--accent-color);
+      }
+
+      .status.status-already-tweeted {
+        background-color: rgba(0, 136, 255, 0.2);
+        color: #0088ff;
+        border-color: #0088ff;
+      }
+
+      .status.status-checking {
+        background-color: rgba(0, 204, 255, 0.2);
+        color: #00ccff;
+        border-color: #00ccff;
+        animation: pulse 1.5s infinite;
+      }
+
+      .status.status-error,
+      .status.status-failed {
+        background-color: rgba(255, 0, 0, 0.2);
+        color: var(--error-color);
+        border-color: var(--error-color);
+      }
+
+      .status.status-simulated {
+        background-color: rgba(255, 204, 0, 0.2);
+        color: var(--warning-color);
+        border-color: var(--warning-color);
+      }
+
+      /* Create tooltip for detailed error information */
+      .status-tooltip {
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: #000000;
+        color: #ffffff;
+        padding: 8px 12px;
+        border-radius: 0;
+        border: 1px solid var(--error-color);
+        font-size: 12px;
+        white-space: normal;
+        width: 250px;
+        z-index: 1000;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.2s, visibility 0.2s;
+        text-transform: none;
+        letter-spacing: normal;
+        pointer-events: none;
+        font-weight: normal;
+      }
+
+      /* Show tooltip on hover */
+      .status:hover .status-tooltip {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      /* Add a small triangle pointer to the tooltip */
+      .status-tooltip::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border-width: 5px;
+        border-style: solid;
+        border-color: var(--error-color) transparent transparent transparent;
+      }
+
+      /* Enhanced card borders glow */
+      .card {
+        box-shadow: 0 0 15px var(--glow-strength);
+        animation: pulse-border 4s infinite;
+        background-color: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(5px);
+      }
+
+      @keyframes pulse-border {
+        0% {
+          box-shadow: 0 0 5px var(--glow-strength);
+        }
+        50% {
+          box-shadow: 0 0 20px var(--glow-strength);
+        }
+        100% {
+          box-shadow: 0 0 5px var(--glow-strength);
+        }
+      }
+
+      /* Enhanced hover effects for rows */
+      table tr:hover {
+        background-color: rgba(0, 255, 0, 0.08);
+        box-shadow: inset 0 0 2px var(--accent-color);
+      }
+
+      /* Enhanced last scan display */
+      #lastScan {
+        background-color: rgba(0, 0, 0, 0.7);
+        border: 1px solid var(--accent-color);
+        padding: 5px 10px;
+        margin-right: 10px;
+        font-family: var(--font-mono);
+        color: var(--accent-color);
+        letter-spacing: 1px;
+        font-weight: bold;
+        text-shadow: 0 0 5px var(--glow-strength);
+      }
+
+      /* Chart containers */
+      .chart-container {
+        height: 120px;
+        width: 100%;
+        margin-top: 10px;
+        position: relative;
+        margin-bottom: 10px;
+        border: 1px solid rgba(147, 51, 234, 0.2);
+        background-color: rgba(0, 0, 0, 0.2);
+        padding: 10px;
+        border-radius: 0;
+      }
+
+      /* Chart header with title */
+      .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 5px;
+        padding: 0 5px;
+      }
+
+      .chart-title {
+        font-size: 12px;
+        font-weight: bold;
+        color: var(--accent-color);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      /* 6. Color highlighting for system logs based on message type */
+      .log-row-rescanning {
+        background-color: rgba(255, 204, 0, 0.1) !important;
+      }
+
+      .log-row-rescanning:hover {
+        background-color: rgba(255, 204, 0, 0.2) !important;
+      }
+
+      .log-row-info {
+        background-color: rgba(0, 136, 255, 0.05) !important;
+      }
+
+      .log-row-info:hover {
+        background-color: rgba(0, 136, 255, 0.15) !important;
+      }
+
+      .log-row-new-token {
+        background-color: rgba(4, 120, 87, 0.1) !important;
+      }
+
+      .log-row-new-token:hover {
+        background-color: rgba(4, 120, 87, 0.2) !important;
+      }
+
+      .log-row-error {
+        background-color: rgba(239, 68, 68, 0.1) !important;
+      }
+
+      .log-row-error:hover {
+        background-color: rgba(239, 68, 68, 0.2) !important;
+      }
+
+      /* Remove the red X indicators by making them invisible */
+      .error-indicator {
+        display: none;
+      }
+
+      /* Latest MongoDB entry styling */
+      .latest-entry {
+        border: 1px solid var(--accent-dim);
+        background-color: rgba(0, 0, 0, 0.3);
+        padding: 8px;
+        margin-top: 10px;
+      }
+
+      .latest-entry-title {
+        color: var(--accent-color);
+        font-weight: bold;
+        font-size: 14px;
+        margin-bottom: 5px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .latest-entry-content {
+        font-family: var(--font-mono);
+        font-size: 13px;
+      }
+
+      .entry-badge {
+        background-color: var(--accent-dim);
+        color: var(--text-primary);
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 0;
+        display: inline-block;
+        margin-left: 5px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      /* Status row styling */
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(0, 255, 0, 0.1);
+      }
+
+      /* Status indicators */
+      .status {
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: bold;
+        border: 1px solid currentColor;
+        text-transform: uppercase;
+      }
+
+      .status-offline {
+        color: var(--error-color);
+        border-color: var(--error-color);
+      }
+
+      .status-info {
+        color: #00ccff;
+        border-color: #00ccff;
+      }
+
+      .status-error {
+        color: var(--error-color);
+        border-color: var(--error-color);
+      }
+
+      .status-warning {
+        color: #ffcc00;
+        border-color: #ffcc00;
+      }
+
+      /* Make card borders glow */
+      .card {
+        box-shadow: 0 0 10px var(--glow-strength);
+        animation: pulse-border 4s infinite;
+      }
+
+      @keyframes pulse-border {
+        0% {
+          box-shadow: 0 0 5px var(--glow-strength);
+        }
+        50% {
+          box-shadow: 0 0 15px var(--glow-strength);
+        }
+        100% {
+          box-shadow: 0 0 5px var(--glow-strength);
+        }
+      }
+
+      /* Hover effects for rows */
+      table tr:hover {
+        background-color: rgba(0, 255, 0, 0.05);
+      }
+
+      /* Styled last scan display */
+      #lastScan {
+        background-color: rgba(0, 0, 0, 0.5);
+        border: 1px solid var(--accent-color);
+        padding: 5px 10px;
+        margin-right: 10px;
+        font-family: "Courier New", monospace;
+        color: var(--accent-color);
+      }
+
+      /* Fix the Z-index of error indicators to ensure they're always visible */
+      .error-indicator {
+        z-index: 100;
+        font-size: 20px;
+        font-weight: bold;
+        color: var(--error-color);
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        text-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+      }
+
+      /* Ensure scrollable areas have visible scrollbars */
+      .scrollable-table::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      .scrollable-table::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.3);
+      }
+
+      .scrollable-table::-webkit-scrollbar-thumb {
+        background: var(--accent-color);
+        border-radius: 0;
+      }
+
+      /* Responsive adjustments for better fit */
+      @media (max-width: 1200px) {
+        .dashboard-container {
+          grid-gap: 15px;
+        }
+
+        .card {
+          padding: 8px;
+        }
+      }
+
+      /* Essential layout styles */
+      body {
+        background-color: var(--primary-bg);
+        color: var(--accent-color);
+        font-family: "Courier New", monospace;
+        margin: 0;
+        padding: 16px;
+        box-sizing: border-box;
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
+      }
+
+      /* Main container */
+      .dashboard-container {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        grid-template-rows: auto 1fr 1fr;
+        gap: 15px;
+        padding: 15px;
+        height: calc(100vh - 30px);
+      }
+
+      /* Header spans full width in first row */
+      .dashboard-header {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      /* System logs card in second row, first column - taller now */
+      .system-logs {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        height: auto;
+        max-height: calc(
+          (100vh - 30px - 15px * 3) / 3
+        ); /* Ensure it's exactly half height of token activity */
+      }
+
+      /* Token activity card in second and third row, second column */
+      .token-activity {
+        grid-column: 2;
+        grid-row: 2 / 4;
+        display: flex;
+        flex-direction: column;
+        height: calc(
+          (100vh - 30px - 15px * 2) * 2 / 3
+        ); /* Make sure this is twice the height of system logs */
+      }
+
+      /* System status card in third row, first column with reduced height */
+      .system-status {
+        grid-column: 1;
+        grid-row: 3;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Fix table column widths to prevent overlap */
+      .token-activity th,
+      .token-activity td {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .token-activity th:nth-child(1),
+      .token-activity td:nth-child(1) {
+        width: 24%;
+      }
+
+      .token-activity th:nth-child(2),
+      .token-activity td:nth-child(2) {
+        width: 20%;
+        overflow: visible; /* Allow copy button to be visible */
+      }
+
+      .token-activity th:nth-child(3),
+      .token-activity td:nth-child(3) {
+        width: 12%;
+        text-align: right;
+      }
+
+      .token-activity th:nth-child(4),
+      .token-activity td:nth-child(4) {
+        width: 12%;
+        text-align: right;
+      }
+
+      .token-activity th:nth-child(5),
+      .token-activity td:nth-child(5) {
+        width: 12%;
+        text-align: center;
+      }
+
+      .token-activity th:nth-child(6),
+      .token-activity td:nth-child(6) {
+        width: 20%;
+        text-align: center;
+      }
+
+      /* Enhance the address container and copy button */
+      .address-container {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        position: relative;
+      }
+
+      .address-cell {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        background-color: rgba(31, 31, 58, 0.3);
+        padding: 4px 8px;
+        border-radius: 4px;
+        color: var(--text-secondary);
+        width: 70%;
+        display: inline-block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .copy-button {
+        background: rgba(255, 140, 0, 0.1);
+        color: var(--accent-color);
+        border: 1px solid var(--accent-color);
+        padding: 3px 7px;
+        font-size: 11px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+        position: relative;
+        right: 0;
+      }
+
+      /* Enhance the status indicators - make them more visible */
+      .status.status-online {
+        background: linear-gradient(to bottom right, #22cc88, #22aa77);
+        color: white;
+        border: none;
+        box-shadow: 0 0 10px rgba(34, 204, 136, 0.5);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+
+      /* Improve system status section */
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 10px 15px;
+        background-color: rgba(31, 31, 58, 0.3);
+        border-radius: 6px;
+        border-left: 3px solid var(--accent-color);
+        transition: all 0.2s ease;
+      }
+
+      .status-row:hover {
+        background-color: rgba(31, 31, 58, 0.5);
+        transform: translateX(2px);
+      }
+
+      .service-connected {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 14px;
+      }
+
+      .live-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: var(--success-color);
+        margin-right: 10px;
+        position: relative;
+        display: inline-block;
+        box-shadow: 0 0 10px var(--success-color);
+        animation: pulse 2s infinite;
+      }
+
+      /* Format currency values better */
+      .token-activity td:nth-child(3),
+      .token-activity td:nth-child(4) {
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+        font-size: 13px;
+        text-align: right;
+        padding-right: 15px;
+      }
+
+      /* Add color coding to market cap values */
+      .market-cap-value {
+        font-weight: 600;
+        border-radius: 4px;
+        padding: 4px 8px;
+        display: inline-block;
+        width: 85%;
+        text-align: right;
+        font-family: var(--font-mono);
+      }
+
+      .market-cap-high {
+        color: #22cc88;
+        background-color: rgba(34, 204, 136, 0.1);
+      }
+
+      .market-cap-medium {
+        color: #ffbb33;
+        background-color: rgba(255, 187, 51, 0.1);
+      }
+
+      .market-cap-low {
+        color: #ff8c00;
+        background-color: rgba(255, 140, 0, 0.1);
+      }
+
+      /* Enhance the scrollable tables */
+      .scrollable-table {
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 140, 0, 0.3) rgba(31, 31, 58, 0.2);
+        border-radius: 0 0 8px 8px;
+      }
+
+      /* Additional UI enhancements */
+      .token-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 0;
+        transition: all 0.2s ease;
+      }
+
+      tr:hover .token-info {
+        transform: translateX(3px);
+      }
+
+      .token-logo {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background-color: #232338;
+        border: 2px solid rgba(255, 140, 0, 0.5);
+        object-fit: cover;
+        transition: all 0.3s ease;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+
+      tr:hover .token-logo {
+        border-color: rgba(255, 140, 0, 0.8);
+        box-shadow: 0 0 10px rgba(255, 140, 0, 0.3);
+        transform: scale(1.05);
+      }
+
+      /* Enhanced system logs */
+      .system-logs {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .system-logs .card-content {
+        flex: 1;
+        overflow: auto;
+        scrollbar-width: thin;
+      }
+
+      .system-logs table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+      }
+
+      .system-logs th {
+        text-align: left;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-color);
+        letter-spacing: 0.5px;
+        border-bottom: 1px solid var(--card-border);
+        position: sticky;
+        top: 0;
+        background-color: var(--card-bg);
+      }
+
+      .system-logs td {
+        padding: 8px 12px;
+        font-size: 13px;
+        border-bottom: 1px solid rgba(31, 31, 58, 0.3);
+        vertical-align: middle;
+      }
+
+      .system-logs tr:nth-child(even) {
+        background-color: rgba(31, 31, 58, 0.2);
+      }
+
+      .system-logs tr:hover {
+        background-color: rgba(31, 31, 58, 0.4);
+      }
+
+      .level {
+        text-transform: uppercase;
+        font-weight: 600;
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        display: inline-block;
+        min-width: 60px;
+        text-align: center;
+      }
+
+      .level.info {
+        background-color: rgba(51, 102, 255, 0.2);
+        color: #3399ff;
+      }
+
+      .level.error {
+        background-color: rgba(255, 51, 85, 0.2);
+        color: #ff3355;
+      }
+
+      .level.warning {
+        background-color: rgba(255, 187, 51, 0.2);
+        color: #ffbb33;
+      }
+
+      .level.success {
+        background-color: rgba(34, 204, 136, 0.2);
+        color: #22cc88;
+      }
+
+      /* Enhance header elements */
+      .dashboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 20px;
+        background: linear-gradient(
+          to right,
+          rgba(15, 15, 30, 0.9),
+          rgba(25, 25, 45, 0.7)
+        );
+        border-radius: 10px;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .dashboard-header::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(
+          to right,
+          transparent,
+          var(--accent-color),
+          transparent
+        );
+        opacity: 0.5;
+      }
+
+      .logo {
+        font-weight: 800;
+        font-size: 24px;
+        color: var(--accent-color);
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        text-shadow: 0 0 15px rgba(255, 140, 0, 0.4);
+      }
+
+      /* Stop agent button improvements */
+      .stop-agent-button {
+        background: linear-gradient(to bottom, #ff3355, #dd1133);
+        color: white;
+        border: none;
+        padding: 8px 15px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        box-shadow: 0 2px 6px rgba(255, 51, 85, 0.3);
+        transition: all 0.2s ease;
+      }
+
+      .stop-agent-button:hover {
+        background: linear-gradient(to bottom, #ff4466, #ee2244);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(255, 51, 85, 0.4);
+      }
+
+      .stop-agent-button:active {
+        transform: translateY(1px);
+        box-shadow: 0 2px 4px rgba(255, 51, 85, 0.3);
+      }
+
+      /* System status container - make it static with auto height */
+      .system-status {
+        grid-column: 1;
+        grid-row: 3;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .system-status .card-content {
+        padding: 15px;
+        overflow: visible;
+        flex: 0 0 auto;
+      }
+
+      /* Ensure status rows don't cause overflow */
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 10px 15px;
+        background-color: rgba(31, 31, 58, 0.3);
+        border-radius: 6px;
+        border-left: 3px solid var(--accent-color);
+        transition: all 0.2s ease;
+      }
+
+      /* Improve status button visibility */
+      .status {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        text-align: center;
+        min-width: 140px;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .status::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          to bottom right,
+          rgba(255, 255, 255, 0.2),
+          transparent
+        );
+        opacity: 0.4;
+      }
+
+      .status.status-online {
+        background: linear-gradient(to bottom right, #22cc88, #22aa77);
+        color: white;
+        border: none;
+        box-shadow: 0 0 10px rgba(34, 204, 136, 0.5);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+
+      .status.status-already-tweeted {
+        background: linear-gradient(to bottom right, #3366ff, #1144cc);
+        color: white;
+        border: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+
+      .status.status-error,
+      .status.status-failed {
+        background: linear-gradient(to bottom right, #ff3355, #dd1133);
+        color: white;
+        border: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+
+      .status.status-checking {
+        background: linear-gradient(to bottom right, #0099aa, #007788);
+        color: white;
+        border: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+
+      /* System metrics styling - ensure no overflow */
+      .system-metrics {
+        margin-top: 15px;
+        border-top: 1px solid rgba(255, 140, 0, 0.2);
+        padding-top: 15px;
+      }
+
+      .metrics-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 8px 12px;
+        background-color: rgba(31, 31, 58, 0.2);
+        border-radius: 6px;
+        border-left: 3px solid var(--accent-color);
+      }
+
+      /* Ensure token activity monitor has proper spacing */
+      .token-activity .scrollable-table {
+        max-height: calc(100vh - 160px);
+      }
+
+      /* Token status cells need more width */
+      .token-activity th:nth-child(6),
+      .token-activity td:nth-child(6) {
+        width: 160px;
+        text-align: center;
+      }
+
+      /* Token table improvements */
+      .token-activity td {
+        padding: 10px 12px;
+        font-size: 13px;
+        border-bottom: 1px solid rgba(31, 31, 58, 0.3);
+        vertical-align: middle;
+      }
+
+      /* Adjust market cap column width for consistent display */
+      .token-activity th:nth-child(3),
+      .token-activity td:nth-child(3),
+      .token-activity th:nth-child(4),
+      .token-activity td:nth-child(4) {
+        width: 140px;
+        text-align: right;
+        padding-right: 15px;
+      }
+
+      /* Status indicators */
+      .status {
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 13px;
+        display: inline-block;
+        text-align: center;
+        min-width: 90px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+
+      .status-online {
+        background-color: rgba(34, 204, 136, 0.15);
+        color: #33dd99;
+        border: 1px solid rgba(34, 204, 136, 0.3);
+        box-shadow: 0 0 10px rgba(34, 204, 136, 0.2);
+      }
+
+      .status-offline {
+        background-color: rgba(255, 0, 0, 0.1);
+        color: #ff0000;
+        border: 1px solid rgba(255, 0, 0, 0.3);
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+      }
+
+      .status-checking {
+        background-color: rgba(0, 153, 170, 0.15);
+        color: #00bbcc;
+        border: 1px solid rgba(0, 153, 170, 0.3);
+      }
+
+      .status-tweeted {
+        background-color: rgba(51, 102, 255, 0.15);
+        color: #66aaff;
+        border: 1px solid rgba(51, 102, 255, 0.3);
+        box-shadow: 0 0 10px rgba(51, 102, 255, 0.2);
+      }
+
+      .status-failed {
+        background-color: rgba(255, 51, 85, 0.15);
+        color: #ff6677;
+        border: 1px solid rgba(255, 51, 85, 0.3);
+        box-shadow: 0 0 10px rgba(255, 51, 85, 0.2);
+      }
+
+      /* System metrics styling */
+      .system-metrics {
+        background-color: rgba(31, 31, 58, 0.3);
+        border-radius: 6px;
+        padding: 10px;
+        margin-top: 15px;
+      }
+
+      .metrics-row {
+        display: flex;
+        justify-content: space-between;
+        margin: 5px 0;
+        font-family: var(--font-mono);
+      }
+
+      .metric-label {
+        color: var(--text-secondary);
+        font-size: 13px;
+      }
+
+      .metric-value {
+        color: var(--accent-color);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      /* Token activity enhanced styling */
+      .token-activity {
+        grid-row: 2 / 4;
+      }
+
+      .token-activity .card-content {
+        padding: 0;
+        height: calc(100% - 50px);
+        overflow: auto;
+      }
+
+      .token-activity-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .token-activity-table th {
+        background-color: rgba(31, 31, 58, 0.5);
+        padding: 10px;
+        text-align: left;
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-weight: 600;
+        text-transform: uppercase;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+
+      .token-activity-table td {
+        padding: 12px 10px;
+        border-bottom: 1px solid rgba(31, 31, 58, 0.5);
+        vertical-align: middle;
+      }
+
+      .token-activity-table tr:hover {
+        background-color: rgba(31, 31, 58, 0.3);
+      }
+
+      .token-info {
+        display: flex;
+        align-items: center;
+      }
+
+      .token-text {
+        margin-left: 10px;
+      }
+
+      /* Address container improvements */
+      .address-container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        max-width: 160px;
+      }
+
+      .token-address {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 120px;
+      }
+
+      .copy-button {
+        background-color: transparent;
+        border: 1px solid var(--accent-color);
+        color: var(--accent-color);
+        border-radius: 4px;
+        padding: 2px 5px;
+        font-size: 10px;
+        cursor: pointer;
+        margin-left: 5px;
+        transition: all 0.2s ease;
+      }
+
+      .copy-button:hover {
+        background-color: var(--accent-light);
+        box-shadow: 0 0 8px rgba(255, 140, 0, 0.2);
+      }
+
+      /* Market cap styling with better formatting */
+      .market-cap-high {
+        background-color: rgba(34, 204, 136, 0.1);
+        color: #33dd99;
+        border: 1px solid rgba(34, 204, 136, 0.2);
+      }
+
+      .market-cap-medium {
+        background-color: rgba(255, 187, 51, 0.1);
+        color: #ffcc44;
+        border: 1px solid rgba(255, 187, 51, 0.2);
+      }
+
+      .market-cap-low {
+        background-color: rgba(51, 102, 255, 0.1);
+        color: #66aaff;
+        border: 1px solid rgba(51, 102, 255, 0.2);
+      }
+
+      /* Live indicator pulse animation */
+      .live-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background-color: var(--success-color);
+        border-radius: 50%;
+        margin-right: 6px;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(34, 204, 136, 0.7);
+        }
+        70% {
+          box-shadow: 0 0 0 5px rgba(34, 204, 136, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(34, 204, 136, 0);
+        }
+      }
+
+      /* System status section styling */
+      .system-status {
+        height: auto;
+        overflow: visible;
+      }
+
+      .system-status .card-content {
+        padding: 15px;
+        overflow: visible;
+      }
+
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 5px 0;
+      }
+
+      .service-connected {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+
+      /* Dashboard grid layout with system logs expanded */
+      .dashboard-container {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        grid-template-rows: auto 1fr 1fr;
+        gap: 15px;
+        padding: 15px;
+        height: calc(100vh - 30px);
+      }
+
+      .dashboard-header {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .system-logs {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        height: auto;
+        max-height: calc(
+          (100vh - 30px - 15px * 3) / 3
+        ); /* Ensure it's exactly half height of token activity */
+      }
+
+      .token-activity {
+        grid-column: 2;
+        grid-row: 2 / 4;
+        display: flex;
+        flex-direction: column;
+        height: calc(
+          (100vh - 30px - 15px * 2) * 2 / 3
+        ); /* Make sure this is twice the height of system logs */
+      }
+
+      .system-status {
+        grid-column: 1;
+        grid-row: 3;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Status container split into columns */
+      .status-container {
+        display: flex;
+        width: 100%;
+        height: 100%;
+      }
+
+      .status-column {
+        flex: 1;
+        padding-right: 10px;
+      }
+
+      .metrics-column {
+        flex: 1;
+        padding-left: 10px;
+        border-left: 1px solid rgba(31, 31, 58, 0.3);
+      }
+
+      /* Agent buttons styling */
+      .agent-button {
+        padding: 8px 15px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        transition: all 0.2s ease;
+      }
+
+      .start-agent-button {
+        background: linear-gradient(to bottom, #22cc88, #22aa77);
+        color: white;
+        border: none;
+        box-shadow: 0 2px 6px rgba(34, 204, 136, 0.3);
+      }
+
+      .start-agent-button:hover {
+        background: linear-gradient(to bottom, #33dd99, #33bb88);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(34, 204, 136, 0.4);
+      }
+
+      .start-agent-button:active {
+        transform: translateY(1px);
+        box-shadow: 0 2px 4px rgba(34, 204, 136, 0.3);
+      }
+
+      /* Header container layout */
+      .header-container {
+        display: flex;
+        width: 100%;
+        align-items: center;
+      }
+
+      .header-left {
+        flex: 1;
+        display: flex;
+        align-items: center;
+      }
+
+      .header-center {
+        flex: 2;
+        display: flex;
+        justify-content: center;
+      }
+
+      .header-right {
+        flex: 1;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 15px;
+      }
+
+      /* Update system logs table to fill container */
+      .system-logs .card-content {
+        flex: 1;
+        overflow: auto;
+      }
+
+      .scrollable-table {
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+      }
+
+      /* ASCII Logo styling */
+      .ascii-logo {
+        font-family: var(--font-mono);
+        color: var(--accent-color);
+        line-height: 1;
+        font-size: 12px;
+        margin-top: -10px;
+        margin-bottom: -10px;
+      }
+
+      .ascii-logo pre {
+        margin: 0;
+        padding: 0;
+      }
+
+      /* Dashboard layout matching the screenshot */
+      .dashboard-container {
+        display: grid;
+        grid-template-columns: 1fr 2.5fr; /* Adjusted to match the red boxes - left column narrower, right wider */
+        grid-template-rows: auto 1fr;
+        gap: 15px;
+        padding: 15px;
+        height: calc(100vh - 30px);
+        max-width: 100%;
+      }
+
+      .dashboard-header {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0;
+        min-height: 100px; /* Increased from 80px to give more space */
+        overflow: visible; /* Prevent clipping */
+        z-index: 10; /* Ensure header is above other elements */
+      }
+
+      .left-column {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        height: calc(
+          100vh - 30px - 100px - 15px
+        ); /* Adjusted for increased header height */
+      }
+
+      .system-logs {
+        flex: 0 0 70%; /* Increased from 65% to 70% to make system logs taller */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 400px; /* Ensure minimum height */
+      }
+
+      .system-status {
+        flex: 0 0 30%; /* Decreased from 35% to 30% */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .token-activity {
+        grid-column: 2;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 600px; /* Ensure minimum height */
+      }
+
+      /* Header container for latest token - fix clipping */
+      .header-center {
+        flex: 2;
+        display: flex;
+        justify-content: center;
+        overflow: visible; /* Prevent clipping */
+        min-height: 60px; /* Increased from 50px */
+        z-index: 20; /* Ensure it's above other elements */
+      }
+
+      /* Mongo latest entry styling to prevent clipping */
+      .mongo-latest-entry {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 8px 15px;
+        background-color: rgba(31, 31, 58, 0.4);
+        border-radius: 8px;
+        min-width: 350px;
+        max-width: 550px;
+        margin: 0 15px;
+        z-index: 5;
+        overflow: visible;
+      }
+
+      .mongo-value {
+        font-size: 18px; /* Increased from 16px for better visibility */
+        font-weight: 700;
+        color: white;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 500px;
+        padding: 4px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="dashboard-container">
+      <!-- Dashboard Header -->
+      <div class="dashboard-header">
+        <div class="header-container">
+          <div class="header-left">
+            <div class="ascii-logo">
+              <pre>
+_     ___ ___ ___ 
+| |   / _ \| _ \ __|
+| |__| (_) |   / _|
+|____|\___ /|_|_\___|
+          </pre
+              >
+            </div>
+          </div>
+          <div class="header-center">
+            <div class="mongo-latest-entry">
+              <div class="mongo-label">LATEST:</div>
+              <div class="mongo-value" id="headerLatestEntry">--</div>
+              <div class="mongo-details">
+                <span class="entry-badge" id="headerEntryStatus">LATEST</span>
+                <span class="mongo-address" id="headerEntryAddress">--</span>
+                <span class="mongo-time" id="headerEntryTime">Added: --</span>
+              </div>
+            </div>
+          </div>
+          <div class="header-right">
+            <div class="metrics-display">
+              <div class="metric">
+                Last Scan: <span id="headerLastScan">23:47:46</span>
+              </div>
+            </div>
+            <button
+              class="agent-button start-agent-button"
+              id="startAgentButton"
+            >
+              START AGENT
+            </button>
+            <button
+              class="agent-button stop-agent-button"
+              id="stopAgentButton"
+              style="display: none"
+            >
+              STOP AGENT
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Left Column Container -->
+      <div class="left-column">
+        <!-- System Logs - Sized according to red box -->
+        <div class="card system-logs">
+          <div class="card-title">
+            <h2>SYSTEM LOGS</h2>
+            <button class="clear-button" onclick="clearSystemLogs()">
+              CLEAR
+            </button>
+          </div>
+          <div class="card-content">
+            <div class="scrollable-table">
+              <table id="systemLogsTable" class="logs-table">
+                <thead>
+                  <tr>
+                    <th>TIME</th>
+                    <th>LEVEL</th>
+                    <th>MESSAGE</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Status - Sized according to red box -->
+        <div class="card system-status">
+          <div class="card-title">
+            <h2>SYSTEM STATUS</h2>
+          </div>
+          <div class="card-content">
+            <div class="status-container">
+              <!-- Left column for status indicators -->
+              <div class="status-column">
+                <div class="status-section">
+                  <div class="status-row">
+                    <span class="service-connected"
+                      ><span class="live-indicator"></span>Status:</span
+                    >
+                    <span class="status status-online">ONLINE</span>
+                  </div>
+                  <div class="status-row">
+                    <span class="service-connected"
+                      ><span class="live-indicator"></span>MongoDB:</span
+                    >
+                    <span class="status status-online" id="mongoStatus"
+                      >ONLINE</span
+                    >
+                  </div>
+                  <div class="status-row">
+                    <span class="service-connected"
+                      ><span class="live-indicator"></span>Twitter:</span
+                    >
+                    <span class="status status-online" id="twitterStatus"
+                      >ONLINE</span
+                    >
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right column for metrics -->
+              <div class="metrics-column">
+                <div class="system-metrics">
+                  <div class="metrics-row">
+                    <span class="metric-label">Last Scan:</span>
+                    <span class="metric-value" id="lastScanMetric"
+                      >23:47:46</span
+                    >
+                  </div>
+                  <div class="metrics-row">
+                    <span class="metric-label">Last Tweet:</span>
+                    <span class="metric-value" id="lastTweetMetric">--</span>
+                  </div>
+                  <div class="metrics-row">
+                    <span class="metric-label">MongoDB Count:</span>
+                    <span class="metric-value" id="mongoCountMetric"
+                      >1,964</span
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Token Activity Monitor -->
+      <div class="card token-activity">
+        <div class="card-title">
+          <h2>TOKEN ACTIVITY MONITOR</h2>
+          <div>
+            <button class="refresh-button" onclick="refreshData()">
+              REFRESH
+            </button>
+            <button class="clear-button" onclick="clearTokenActivity()">
+              CLEAR
+            </button>
+          </div>
+        </div>
+        <div class="card-content">
+          <div class="scrollable-table">
+            <table id="tokenActivityTable" class="token-activity-table">
+              <thead>
+                <tr>
+                  <th>TOKEN</th>
+                  <th>ADDRESS</th>
+                  <th>MARKET CAP</th>
+                  <th>STATUS</th>
+                  <th>TIME</th>
+                </tr>
+              </thead>
+              <tbody id="tokenActivityBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const socket = io();
+
+      // Initialize global state
+      window.tokenData = [];
+      window.systemLogs = [];
+
+      // Add socket event listeners to handle data from the server
+      socket.on("connect", () => {
+        console.log("Connected to server");
+        addLogEntry("info", "Connected to server");
+      });
+
+      socket.on("disconnect", () => {
+        console.log("Disconnected from server");
+        addLogEntry("error", "Disconnected from server");
+      });
+
+      // Listen for various event types from the server
+      socket.on("tokenUpdate", (data) => {
+        console.log("Received token update:", data);
+        if (data && data.token) {
+          // Add to tokenData array if it doesn't exist
+          const tokens = Array.isArray(window.tokenData)
+            ? window.tokenData
+            : [];
+          // Check if this token is already in our array
+          const existingIndex = tokens.findIndex((t) => t.id === data.token.id);
+          if (existingIndex >= 0) {
+            // Update existing token
+            tokens[existingIndex] = data.token;
+          } else {
+            // Add new token
+            tokens.unshift(data.token);
+          }
+          window.tokenData = tokens;
+          // Update UI
+          updateTokenActivity(tokens);
+        }
+      });
+
+      // Listen for token data array
+      socket.on("tokenData", (data) => {
+        console.log("Received token data array:", data);
+        if (Array.isArray(data)) {
+          window.tokenData = data;
+          updateTokenActivity(data);
+        }
+      });
+
+      // Listen for logs
+      socket.on("logs", (data) => {
+        console.log("Received logs:", data);
+        if (Array.isArray(data)) {
+          window.systemLogs = data;
+          updateSystemLogs(data);
+        }
+      });
+
+      // Listen for individual log entries
+      socket.on("log", (data) => {
+        console.log("Received log entry:", data);
+        if (data) {
+          // Add to logs array
+          window.systemLogs.unshift(data);
+          // Update logs display
+          updateSystemLogs(window.systemLogs);
+        }
+      });
+
+      // Listen for system status updates
+      socket.on("systemStatus", (data) => {
+        console.log("Received system status:", data);
+        updateSystemStatus(data);
+      });
+
+      // Listen for agent status updates
+      socket.on("agentStatus", (data) => {
+        console.log("Received agent status:", data);
+        updateAgentStatus(data.running);
+      });
+
+      // Listen for latest entry updates
+      socket.on("latestEntry", (data) => {
+        console.log("Received latest entry:", data);
+        if (data) {
+          updateLatestEntryHeader(data);
+        }
+      });
+
+      // Listen for stateUpdate (comprehensive updates)
+      socket.on("stateUpdate", (data) => {
+        console.log("Received state update:", data);
+        // Update latest entry if available
+        if (data.latestMongoEntry) {
+          updateLatestEntryHeader(data.latestMongoEntry);
+        }
+
+        // Update last scan time if available
+        if (data.lastScanTime) {
+          const scanTime = new Date(data.lastScanTime);
+          document.getElementById("headerLastScan").textContent =
+            scanTime.toLocaleTimeString();
+        }
+      });
+
+      // Function to update the latest entry in the header
+      function updateLatestEntryHeader(entry) {
+        const headerEntry = document.getElementById("headerLatestEntry");
+        const headerStatus = document.getElementById("headerEntryStatus");
+        const headerAddress = document.getElementById("headerEntryAddress");
+        const headerTime = document.getElementById("headerEntryTime");
+
+        if (headerEntry && entry) {
+          headerEntry.textContent = entry.symbol
+            ? `${entry.symbol} ${entry.name || ""}`
+            : entry.name || "Unknown Token";
+
+          if (headerStatus) {
+            headerStatus.textContent = entry.alreadyTweeted
+              ? "TWEETED"
+              : "LATEST";
+            headerStatus.style.backgroundColor = entry.alreadyTweeted
+              ? "#22aa77" // Green for tweeted
+              : "var(--accent-color)"; // Orange for latest
+          }
+
+          if (headerAddress && entry.address) {
+            headerAddress.textContent =
+              entry.address.substring(0, 8) +
+              "..." +
+              entry.address.substring(entry.address.length - 8);
+            headerAddress.title = entry.address;
+          }
+
+          if (headerTime && entry.timestamp) {
+            const date = new Date(entry.timestamp);
+            headerTime.textContent = `Added: ${date.toLocaleTimeString()}`;
+          }
+        }
+      }
+
+      // Initialize components once DOM is loaded
+      document.addEventListener("DOMContentLoaded", function () {
+        setupAgentButtons();
+
+        // Request initial data
+        refreshData();
+
+        // Create some initial log entries
+        addLogEntry("info", "Dashboard initialized");
+        addLogEntry("info", "Waiting for agent to start...");
+      });
+
+      // Set up agent button functionality
+      function setupAgentButtons() {
+        const startButton = document.getElementById("startAgentButton");
+        const stopButton = document.getElementById("stopAgentButton");
+
+        if (!startButton || !stopButton) {
+          console.error("Agent buttons not found");
+          return;
+        }
+
+        startButton.addEventListener("click", function () {
+          console.log("Start button clicked");
+          // Start the agent
+          socket.emit("startAgent");
+
+          // Toggle buttons
+          startButton.style.display = "none";
+          stopButton.style.display = "inline-block";
+
+          // Add log entry
+          addLogEntry("info", "Agent starting...");
+
+          // Request fresh data
+          setTimeout(refreshData, 1000);
+
+          // Set up polling for token data every 5 seconds while agent is running
+          window.tokenDataInterval = setInterval(() => {
+            socket.emit("getTokens", {}, function (response) {
+              if (
+                response &&
+                response.success &&
+                Array.isArray(response.tokens)
+              ) {
+                processTokens(response.tokens);
+              }
+            });
+          }, 5000);
+        });
+
+        stopButton.addEventListener("click", function () {
+          console.log("Stop button clicked");
+          // Stop the agent
+          socket.emit("stopAgent");
+
+          // Toggle buttons
+          stopButton.style.display = "none";
+          startButton.style.display = "inline-block";
+
+          // Add log entry
+          addLogEntry("info", "Agent stopping...");
+
+          // Clear token data polling
+          if (window.tokenDataInterval) {
+            clearInterval(window.tokenDataInterval);
+          }
+        });
+      }
+
+      // Process tokens from server
+      function processTokens(tokens) {
+        console.log("Processing tokens:", tokens);
+
+        const formattedTokens = tokens.map((token) => ({
+          id: token._id
+            ? token._id.toString()
+            : token.id || Math.random().toString(),
+          symbol: token.symbol || "Unknown",
+          name: token.name || "Unknown Token",
+          address: token.address || "No Address",
+          marketCap: token.mc ? `$${token.mc}` : token.marketCap || "$0",
+          status: token.status || "pending",
+          timestamp: token.graduatedAt || token.timestamp || new Date(),
+          logo: token.logoURI || token.logo_url || null,
+        }));
+
+        window.tokenData = formattedTokens;
+        updateTokenActivity(formattedTokens);
+      }
+
+      // Function to refresh all data
+      function refreshData() {
+        console.log("Refreshing data...");
+        socket.emit("refreshData");
+        addLogEntry("info", "Refreshing data...");
+
+        // Also request tokens directly
+        socket.emit("getTokens", {}, function (response) {
+          console.log("getTokens response:", response);
+          if (response && response.success && Array.isArray(response.tokens)) {
+            processTokens(response.tokens);
+          }
+        });
+      }
+
+      // Function to add log entry
+      function addLogEntry(level, message) {
+        const logsTable = document.getElementById("systemLogsTable");
+        if (!logsTable) return;
+
+        const tbody = logsTable.querySelector("tbody");
+        if (!tbody) return;
+
+        const row = document.createElement("tr");
+
+        // Timestamp cell
+        const timestampCell = document.createElement("td");
+        timestampCell.className = "log-timestamp";
+        const now = new Date();
+        timestampCell.textContent = now.toLocaleTimeString();
+
+        // Level cell with styling
+        const levelCell = document.createElement("td");
+        const levelSpan = document.createElement("span");
+        levelSpan.className = "level " + level.toLowerCase();
+        levelSpan.textContent = level.toUpperCase();
+        levelCell.appendChild(levelSpan);
+
+        // Message cell
+        const messageCell = document.createElement("td");
+        messageCell.className = "log-message";
+        messageCell.textContent = message;
+
+        // Add cells to row
+        row.appendChild(timestampCell);
+        row.appendChild(levelCell);
+        row.appendChild(messageCell);
+
+        // Add to top of table
+        tbody.insertBefore(row, tbody.firstChild);
+
+        // Limit to 100 entries
+        while (tbody.children.length > 100) {
+          tbody.removeChild(tbody.lastChild);
+        }
+
+        // Add to global logs array
+        window.systemLogs.unshift({
+          timestamp: now,
+          level: level,
+          message: message,
+        });
+      }
+
+      // Simulated mock data for development testing
+      function generateMockTokens() {
+        return [
+          {
+            id: "1",
+            symbol: "NEGROS",
+            name: "Negros On Sol",
+            address: "FTXdJ6E6NLmCX9oNvGc6ihA7PbV2FgBd51cKsqz1cGjL",
+            logo: "https://ipfs.io/ipfs/QmUPtaCnvZRCi2H4du2vKmEfFU6VaTsXfa3ApdakUZkFsx",
+            marketCap: "$123,500",
+            status: "tweeted",
+            timestamp: new Date(Date.now() - 300000), // 5 minutes ago
+          },
+          {
+            id: "2",
+            symbol: "BONK",
+            name: "Bonk",
+            address: "8xJHvV8sdKFfLVQbMvwMmtKSv9X5g8reHbNteXQkdYLL",
+            logo: "https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I",
+            marketCap: "$5,200,000",
+            status: "tweeted",
+            timestamp: new Date(Date.now() - 600000), // 10 minutes ago
+          },
+          {
+            id: "3",
+            symbol: "MYRO",
+            name: "Myro",
+            address: "MYRGS9Gzu5nzZyYKuYCDWDjzbaSz24vLLSfPsA8XRsG",
+            logo: "https://ipfs.io/ipfs/QmYLuQc6vVqaLRF9G3JeXgkSQYbqcZ8qgUjJQvVkFNRZKm",
+            marketCap: "$3,500,000",
+            status: "failed",
+            timestamp: new Date(Date.now() - 900000), // 15 minutes ago
+          },
+        ];
+      }
+
+      // Development helper - use mock data if server doesn't respond
+      setTimeout(() => {
+        if (window.tokenData.length === 0) {
+          console.log("No tokens received from server, using mock data");
+          const mockTokens = generateMockTokens();
+          window.tokenData = mockTokens;
+          updateTokenActivity(mockTokens);
+        }
+      }, 3000);
+
+      // Function to update token activity table
+      function updateTokenActivity(tokens) {
+        console.log("Updating token activity with:", tokens);
+        const tokenTable = document.getElementById("tokenActivityTable");
+        const tbody = document.getElementById("tokenActivityBody");
+
+        if (!tokenTable || !tbody) {
+          console.error("Token table elements not found");
+          return;
+        }
+
+        // Clear existing rows
+        tbody.innerHTML = "";
+
+        // Check if we have tokens
+        if (!tokens || tokens.length === 0) {
+          // Create empty state row
+          const row = document.createElement("tr");
+          const cell = document.createElement("td");
+          cell.colSpan = 5;
+          cell.textContent = "No tokens available";
+          cell.style.textAlign = "center";
+          cell.style.padding = "40px 0";
+          cell.style.color = "var(--text-secondary)";
+          row.appendChild(cell);
+          tbody.appendChild(row);
+          return;
+        }
+
+        // Sort tokens by timestamp (newest first)
+        const sortedTokens = [...tokens].sort((a, b) => {
+          const timeA = new Date(a.timestamp || 0).getTime();
+          const timeB = new Date(b.timestamp || 0).getTime();
+          return timeB - timeA;
+        });
+
+        // Create rows for each token
+        sortedTokens.forEach((token) => {
+          const row = document.createElement("tr");
+
+          // Token info cell (symbol and name)
+          const tokenCell = document.createElement("td");
+          const tokenInfo = document.createElement("div");
+          tokenInfo.className = "token-info";
+
+          // Logo or placeholder
+          const logoContainer = document.createElement("div");
+          logoContainer.className = "token-logo-container";
+
+          if (token.logo) {
+            const logo = document.createElement("img");
+            logo.className = "token-logo";
+            logo.src = token.logo;
+            logo.alt = token.symbol || "Token";
+            logo.onerror = function () {
+              this.onerror = null;
+              this.src =
+                'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
+            };
+            logoContainer.appendChild(logo);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "token-logo-placeholder";
+            placeholder.textContent = (token.symbol || "?").substring(0, 1);
+            logoContainer.appendChild(placeholder);
+          }
+
+          tokenInfo.appendChild(logoContainer);
+
+          // Token name and symbol
+          const tokenName = document.createElement("div");
+          tokenName.className = "token-name";
+
+          const tokenSymbol = document.createElement("div");
+          tokenSymbol.className = "token-symbol";
+          tokenSymbol.textContent = token.symbol || "Unknown";
+
+          const tokenFullName = document.createElement("div");
+          tokenFullName.className = "token-full-name";
+          tokenFullName.textContent = token.name || "Unknown Token";
+
+          tokenName.appendChild(tokenSymbol);
+          tokenName.appendChild(tokenFullName);
+          tokenInfo.appendChild(tokenName);
+          tokenCell.appendChild(tokenInfo);
+
+          // Address cell with copy button
+          const addressCell = document.createElement("td");
+          const addressContainer = document.createElement("div");
+          addressContainer.className = "address-container";
+
+          const addressSpan = document.createElement("div");
+          addressSpan.className = "address-cell";
+          addressSpan.textContent = token.address
+            ? `${token.address.substring(0, 6)}...${token.address.substring(
+                token.address.length - 4
+              )}`
+            : "N/A";
+          addressSpan.title = token.address || "";
+
+          const copyButton = document.createElement("button");
+          copyButton.className = "copy-button";
+          copyButton.textContent = "Copy";
+          copyButton.onclick = function () {
+            navigator.clipboard.writeText(token.address || "").then(
+              function () {
+                copyButton.textContent = "Copied!";
+                setTimeout(() => {
+                  copyButton.textContent = "Copy";
+                }, 2000);
+              },
+              function () {
+                console.error("Failed to copy address");
+              }
+            );
+          };
+
+          addressContainer.appendChild(addressSpan);
+          addressContainer.appendChild(copyButton);
+          addressCell.appendChild(addressContainer);
+
+          // Market cap cell with formatting
+          const marketCapCell = document.createElement("td");
+          const mcValue = token.marketCap || "$0";
+
+          let mcClass = "market-cap-low";
+          // Convert marketCap to number for comparison
+          let mcNumber = 0;
+          if (typeof mcValue === "string") {
+            // Remove $ and commas, and convert to number
+            mcNumber = Number(mcValue.replace(/[$,]/g, ""));
+          } else if (typeof mcValue === "number") {
+            mcNumber = mcValue;
+          }
+
+          // Determine class based on market cap value
+          if (mcNumber >= 5000000) {
+            mcClass = "market-cap-high";
+          } else if (mcNumber >= 1000000) {
+            mcClass = "market-cap-medium";
+          }
+
+          const marketCapSpan = document.createElement("div");
+          marketCapSpan.className = `market-cap-value ${mcClass}`;
+          marketCapSpan.textContent =
+            typeof mcValue === "string" ? mcValue : formatCurrency(mcValue);
+          marketCapCell.appendChild(marketCapSpan);
+
+          // Status cell
+          const statusCell = document.createElement("td");
+          const statusSpan = document.createElement("div");
+
+          let statusClass = "status-pending";
+          let statusText = "Pending";
+
+          // Map status values to display classes and text
+          switch ((token.status || "").toLowerCase()) {
+            case "tweeted":
+            case "already-tweeted":
+            case "already_tweeted":
+              statusClass = "status-already-tweeted";
+              statusText = "Tweeted";
+              break;
+            case "failed":
+            case "error":
+              statusClass = "status-failed";
+              statusText = "Failed";
+              break;
+            case "checking":
+              statusClass = "status-checking";
+              statusText = "Checking";
+              break;
+            case "posted":
+            case "success":
+              statusClass = "status-success";
+              statusText = "Posted";
+              break;
+            default:
+              // Use defaults
+              break;
+          }
+
+          statusSpan.className = `status ${statusClass}`;
+          statusSpan.textContent = statusText;
+          statusCell.appendChild(statusSpan);
+
+          // Time cell
+          const timeCell = document.createElement("td");
+          timeCell.style.textAlign = "center";
+
+          if (token.timestamp) {
+            const date = new Date(token.timestamp);
+            timeCell.textContent = date.toLocaleTimeString();
+            timeCell.title =
+              date.toLocaleDateString() + " " + date.toLocaleTimeString();
+          } else {
+            timeCell.textContent = "Unknown";
+          }
+
+          // Append all cells to the row
+          row.appendChild(tokenCell);
+          row.appendChild(addressCell);
+          row.appendChild(marketCapCell);
+          row.appendChild(statusCell);
+          row.appendChild(timeCell);
+
+          // Append the row to the table
+          tbody.appendChild(row);
+        });
+      }
+
+      // Helper function to format currency values
+      function formatCurrency(value) {
+        if (value === null || value === undefined) return "$0";
+
+        // If already a string with $ sign, return as is
+        if (typeof value === "string" && value.includes("$")) return value;
+
+        // Convert to number if string
+        const num =
+          typeof value === "string"
+            ? parseFloat(value.replace(/[^\d.-]/g, ""))
+            : value;
+
+        // Check if valid number
+        if (isNaN(num)) return "$0";
+
+        // Format with commas and fixed decimal places
+        return (
+          "$" +
+          num.toLocaleString("en-US", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+          })
+        );
+      }
+
+      // Function to clear token activity table
+      function clearTokenActivity() {
+        const tbody = document.getElementById("tokenActivityBody");
+        if (tbody) {
+          tbody.innerHTML = "";
+          window.tokenData = [];
+          addLogEntry("info", "Token activity cleared");
+        }
+      }
+    </script>
+  </body>
+</html>

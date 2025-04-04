@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LORE Dashboard</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Reset and base styles */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Roboto Mono", monospace;
+        background-color: #0f1120;
+        color: #d1d5db;
+        line-height: 1.5;
+      }
+
+      /* Main layout */
+      .dashboard {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        padding: 10px;
+      }
+
+      /* Header styles */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        margin-bottom: 20px;
+      }
+
+      .logo-container {
+        display: flex;
+        align-items: center;
+      }
+
+      .logo {
+        color: #bb86fc;
+        font-size: 24px;
+        font-weight: bold;
+        margin-right: 20px;
+      }
+
+      .last-scan-container {
+        margin-left: auto;
+        margin-right: 20px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      /* Button styles */
+      button {
+        padding: 10px 15px;
+        border: none;
+        border-radius: 4px;
+        font-family: "Roboto Mono", monospace;
+        font-weight: bold;
+        cursor: pointer;
+        text-transform: uppercase;
+        transition: all 0.3s ease;
+      }
+
+      .stop-agent {
+        background-color: #e74c3c;
+        color: white;
+      }
+
+      .start-agent {
+        background-color: #2ecc71;
+        color: white;
+      }
+
+      .refresh-button {
+        background-color: #3498db;
+        color: white;
+      }
+
+      .clear-button {
+        background-color: #34495e;
+        color: white;
+      }
+
+      /* Card styles */
+      .card {
+        background-color: #1a1d2d;
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .card-header {
+        background-color: #2c3049;
+        padding: 10px 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .card-header h2 {
+        color: #bb86fc;
+        font-size: 18px;
+        font-weight: bold;
+        text-transform: uppercase;
+      }
+
+      .card-content {
+        padding: 15px;
+      }
+
+      /* Content grid */
+      .content-grid {
+        display: grid;
+        grid-template-columns: 380px 1fr;
+        gap: 20px;
+      }
+
+      /* System logs styles */
+      #logsContainer {
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      .logs-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      /* Token activity styles */
+      #tokenActivityContainer {
+        height: 480px;
+        overflow-y: auto;
+        margin-bottom: 15px;
+        padding: 0;
+        border: none;
+        border-radius: 6px;
+        background-color: #1f2035;
+      }
+
+      #tokenActivityContainer table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      #tokenActivity {
+        width: 100%; /* Ensure full width */
+      }
+
+      #tokenActivityContainer thead th {
+        position: sticky;
+        top: 0;
+        background-color: #2c3049;
+        z-index: 5;
+        padding: 8px 10px;
+        text-align: left;
+        color: #bb86fc;
+      }
+
+      /* Adjust column widths to better fit the data */
+      #tokenActivityContainer th:nth-child(1) {
+        width: 20%;
+      } /* TOKEN */
+      #tokenActivityContainer th:nth-child(2) {
+        width: 20%;
+      } /* ADDRESS */
+      #tokenActivityContainer th:nth-child(3) {
+        width: 18%;
+      } /* MARKET CAP */
+      #tokenActivityContainer th:nth-child(4) {
+        width: 18%;
+      } /* LIQUIDITY */
+      #tokenActivityContainer th:nth-child(5) {
+        width: 10%;
+      } /* TIME */
+      #tokenActivityContainer th:nth-child(6) {
+        width: 14%;
+      } /* STATUS */
+
+      .token-table-row {
+        height: 48px; /* Make rows slightly taller */
+      }
+
+      .token-table-row:hover {
+        background-color: rgba(187, 134, 252, 0.1);
+      }
+
+      .token-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .token-cell {
+        min-width: 140px;
+      }
+
+      .token-symbol {
+        font-weight: bold;
+      }
+
+      .token-address {
+        font-family: "Roboto Mono", monospace;
+        font-size: 0.9em;
+      }
+
+      .token-mc,
+      .token-liq {
+        text-align: right;
+        font-family: "Roboto Mono", monospace;
+      }
+
+      .token-time {
+        width: 80px;
+        text-align: center;
+      }
+
+      .token-status {
+        width: 100px;
+        text-align: center;
+      }
+
+      .empty-message {
+        text-align: center;
+        padding: 20px;
+        color: rgba(255, 255, 255, 0.5);
+      }
+
+      /* Tweet history styles */
+      #tweetHistoryCard {
+        margin-top: 20px;
+      }
+
+      #tweetHistoryContainer {
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      .tweet-item {
+        background-color: #2c3049;
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+
+      .tweet-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+
+      .tweet-token {
+        font-weight: bold;
+        color: #bb86fc;
+      }
+
+      .tweet-time {
+        font-size: 0.8em;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .tweet-content {
+        line-height: 1.4;
+        margin-bottom: 8px;
+        white-space: pre-line;
+      }
+
+      .tweet-link {
+        font-size: 0.9em;
+      }
+
+      .tweet-link a {
+        color: #bb86fc;
+        text-decoration: none;
+      }
+
+      .tweet-link a:hover {
+        text-decoration: underline;
+      }
+
+      /* Log level styles */
+      .log-level {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+
+      .log-level-info {
+        background-color: #3498db;
+        color: white;
+      }
+
+      .log-level-success {
+        background-color: #2ecc71;
+        color: white;
+      }
+
+      .log-level-warning {
+        background-color: #f39c12;
+        color: white;
+      }
+
+      .log-level-error {
+        background-color: #e74c3c;
+        color: white;
+      }
+
+      /* Status styles */
+      .status-running {
+        color: #2ecc71;
+      }
+
+      .status-stopped {
+        color: #e74c3c;
+      }
+
+      .status-online {
+        color: #2ecc71;
+      }
+
+      .status-offline {
+        color: #e74c3c;
+      }
+
+      .status-failed {
+        color: #e74c3c;
+        font-weight: bold;
+      }
+
+      .status-tweeted {
+        color: #2ecc71;
+        font-weight: bold;
+      }
+
+      .status-pending {
+        color: #f39c12;
+        font-weight: bold;
+      }
+
+      /* System status styles */
+      .system-status .status-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        padding: 5px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .status-label {
+        font-weight: bold;
+      }
+
+      /* Latest token styles */
+      #latestToken {
+        padding: 10px;
+        background-color: #2c3049;
+        border-radius: 4px;
+      }
+
+      #latestToken h4 {
+        color: #bb86fc;
+        margin-bottom: 10px;
+      }
+
+      .latest-token-details {
+        display: flex;
+        gap: 10px;
+      }
+
+      /* Token styles */
+      .token-logo {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: #2c3049;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        object-fit: contain;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .token-logo-placeholder {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: #2c3049;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #bb86fc;
+        font-weight: bold;
+        font-size: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .token-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 100px;
+      }
+
+      /* LORE logo styling */
+      pre.lore-logo {
+        color: #bb86fc;
+        font-size: 10px;
+        line-height: 1.2;
+        margin: 0;
+        padding: 0;
+      }
+
+      #tokenActivity {
+        max-height: 480px; /* Height to fit 12 token rows (12 × 40px) */
+        overflow-y: auto;
+        margin-bottom: 15px;
+        padding: 0;
+        border-radius: 6px;
+        background-color: #1f2035;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="dashboard">
+      <div class="header">
+        <div class="logo-container">
+          <pre class="lore-logo">
+██╗      ██████╗ ██████╗ ███████╗
+██║     ██╔═══██╗██╔══██╗██╔════╝
+██║     ██║   ██║██████╔╝█████╗  
+██║     ██║   ██║██╔══██╗██╔══╝  
+███████╗╚██████╔╝██║  ██║███████╗
+╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝</pre
+          >
+        </div>
+        <div class="last-scan-container">
+          Last Scan: <span id="lastScanTime">--:--:--</span>
+        </div>
+        <div class="actions">
+          <button id="stopAgentButton" class="stop-agent">STOP AGENT</button>
+          <button id="startAgentButton" class="start-agent">START AGENT</button>
+        </div>
+      </div>
+
+      <div class="content-grid">
+        <!-- Left Column -->
+        <div class="left-column">
+          <!-- System Logs -->
+          <div class="card">
+            <div class="card-header">
+              <h2>SYSTEM LOGS</h2>
+              <button id="clearLogsButton" class="clear-button">CLEAR</button>
+            </div>
+            <div class="card-content" id="logsContainer">
+              <table class="logs-table">
+                <thead>
+                  <tr>
+                    <th>TIME</th>
+                    <th>LEVEL</th>
+                    <th>MESSAGE</th>
+                  </tr>
+                </thead>
+                <tbody id="logsTableBody">
+                  <!-- Logs are rendered dynamically -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Latest Token -->
+          <div class="card">
+            <div class="card-header">
+              <h2>LATEST TOKEN</h2>
+            </div>
+            <div class="card-content">
+              <div id="latestToken">
+                <!-- Latest token info will be displayed here -->
+              </div>
+            </div>
+          </div>
+
+          <!-- System Status -->
+          <div class="card">
+            <div class="card-header">
+              <h2>SYSTEM STATUS</h2>
+            </div>
+            <div class="card-content">
+              <div class="system-status">
+                <div class="status-item">
+                  <span class="status-label">Status:</span>
+                  <span class="status-value" id="agentStatus">STOPPED</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">MongoDB:</span>
+                  <span class="status-value" id="mongoStatus">ONLINE</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">Twitter:</span>
+                  <span class="status-value" id="twitterStatus">ONLINE</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">Token Count:</span>
+                  <span class="status-value" id="tokenCount">1967</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">Last Scan:</span>
+                  <span class="status-value" id="lastScan">N/A</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">Last Tweet:</span>
+                  <span class="status-value" id="lastTweet">Never</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column - Token Activity -->
+        <div class="right-column">
+          <div class="card">
+            <div class="card-header">
+              <h2>TOKEN ACTIVITY MONITOR</h2>
+              <div>
+                <button id="refreshTokensButton" class="refresh-button">
+                  REFRESH
+                </button>
+                <button id="clearTokensButton" class="clear-button">
+                  CLEAR
+                </button>
+              </div>
+            </div>
+            <div class="card-content" id="tokenActivityContainer">
+              <table>
+                <thead>
+                  <tr>
+                    <th>TOKEN</th>
+                    <th>ADDRESS</th>
+                    <th>MARKET CAP</th>
+                    <th>LIQUIDITY</th>
+                    <th>TIME</th>
+                    <th>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody id="tokenActivity">
+                  <!-- Token rows are rendered dynamically -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tweet History Card -->
+          <div class="card" id="tweetHistoryCard">
+            <div class="card-header">
+              <h2>TWEET HISTORY</h2>
+            </div>
+            <div class="card-content" id="tweetHistoryContainer">
+              <!-- Tweet history will be populated dynamically -->
+              <div class="empty-message">No tweets have been posted yet</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      let systemStatus = {
+        agentStatus: "STOPPED",
+        mongoConnected: false,
+        twitterConnected: false,
+        tokenCount: 0,
+        lastScan: "-",
+        lastTweet: "-",
+      };
+
+      // Start agent button
+      document
+        .getElementById("startAgentButton")
+        .addEventListener("click", function () {
+          console.log("Starting agent...");
+          socket.emit("startAgent");
+          this.disabled = true;
+          document.getElementById("stopAgentButton").disabled = false;
+
+          // Update status immediately for better UX
+          updateAgentStatus("RUNNING");
+          addLog("Agent started - scanning for tokens...", "info");
+        });
+
+      // Stop agent button
+      document
+        .getElementById("stopAgentButton")
+        .addEventListener("click", function () {
+          console.log("Stopping agent...");
+          socket.emit("stopAgent");
+          this.disabled = true;
+          document.getElementById("startAgentButton").disabled = false;
+
+          // Update status immediately for better UX
+          updateAgentStatus("STOPPED");
+          addLog("Agent stopped", "info");
+        });
+
+      // Update the UI for agent status
+      function updateAgentStatus(status) {
+        const statusElem = document.getElementById("agentStatus");
+        systemStatus.agentStatus = status;
+
+        if (status === "RUNNING") {
+          statusElem.textContent = "RUNNING";
+          statusElem.className = "status-value status-success";
+        } else {
+          statusElem.textContent = "STOPPED";
+          statusElem.className = "status-value status-error";
+        }
+      }
+
+      // Initial connection
+      socket.on("connect", function () {
+        console.log("Connected to server");
+        // Request initial data
+        socket.emit("refreshData");
+      });
+
+      // Receive and update token activity
+      socket.on("tokenActivity", function (data) {
+        updateTokenActivity(data);
+      });
+
+      // Receive system status updates
+      socket.on("systemStatus", function (data) {
+        updateSystemStatus(data);
+      });
+
+      // Receive and update latest token
+      socket.on("latestToken", function (data) {
+        updateLatestToken(data);
+      });
+
+      // Receive log updates
+      socket.on("logUpdate", function (data) {
+        addLog(data.message, data.level);
+      });
+
+      // Receive tweet history updates
+      socket.on("tweetHistory", function (data) {
+        updateTweetHistory(data);
+      });
+
+      // Refresh tokens button
+      document
+        .getElementById("refreshTokensButton")
+        .addEventListener("click", function () {
+          socket.emit("refreshData");
+          addLog("Data refreshed via dashboard", "info");
+        });
+
+      // Clear tokens button
+      document
+        .getElementById("clearTokensButton")
+        .addEventListener("click", function () {
+          // Clear token activity container
+          document.getElementById("tokenActivityBody").innerHTML = "";
+          addLog("Token activity cleared", "info");
+        });
+
+      // Clear logs button
+      document
+        .getElementById("clearLogsButton")
+        .addEventListener("click", function () {
+          // Clear logs container
+          document.getElementById("logsContainer").innerHTML = "";
+          addLog("Logs cleared", "info");
+        });
+
+      // Helper Functions
+      function updateSystemStatus(status) {
+        if (!status) return;
+
+        // Update status elements
+        const agentStatusElement = document.getElementById("agentStatus");
+        if (agentStatusElement) {
+          agentStatusElement.textContent = status.status || "UNKNOWN";
+          agentStatusElement.className =
+            "status-value " +
+            (status.status === "RUNNING" ? "status-running" : "status-stopped");
+        }
+
+        const mongoStatusElement = document.getElementById("mongoStatus");
+        if (mongoStatusElement) {
+          mongoStatusElement.textContent = status.mongoConnected
+            ? "ONLINE"
+            : "OFFLINE";
+          mongoStatusElement.className =
+            "status-value " +
+            (status.mongoConnected ? "status-online" : "status-offline");
+        }
+
+        const twitterStatusElement = document.getElementById("twitterStatus");
+        if (twitterStatusElement) {
+          twitterStatusElement.textContent = status.twitterConnected
+            ? "ONLINE"
+            : "OFFLINE";
+          twitterStatusElement.className =
+            "status-value " +
+            (status.twitterConnected ? "status-online" : "status-offline");
+        }
+
+        const tokenCountElement = document.getElementById("tokenCount");
+        if (tokenCountElement) {
+          tokenCountElement.textContent = status.mongoCount || "0";
+        }
+
+        const lastScanElement = document.getElementById("lastScan");
+        if (lastScanElement && status.lastScan) {
+          const scanTime = new Date(status.lastScan);
+          lastScanElement.textContent = scanTime.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+
+          // Also update the header last scan time
+          const lastScanTimeElement = document.getElementById("lastScanTime");
+          if (lastScanTimeElement) {
+            lastScanTimeElement.textContent = scanTime.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+          }
+        }
+
+        const lastTweetElement = document.getElementById("lastTweet");
+        if (lastTweetElement) {
+          if (status.lastTweet) {
+            const tweetTime = new Date(status.lastTweet);
+            lastTweetElement.textContent = tweetTime.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+          } else {
+            lastTweetElement.textContent = "Never";
+          }
+        }
+
+        // Update button states
+        updateAgentStatus(status.status);
+      }
+
+      function updateLogs(logs) {
+        if (!logsTableBody || !logs || !logs.length) return;
+
+        // Clear current logs
+        logsTableBody.innerHTML = "";
+
+        // Add new logs (newest first)
+        logs.forEach((log) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${log.timestamp}</td>
+            <td><span class="log-level log-level-${
+              log.level
+            }">${log.level.toUpperCase()}</span></td>
+            <td>${log.message}</td>
+          `;
+          logsTableBody.appendChild(row);
+        });
+      }
+
+      function updateTokenActivity(tokens) {
+        const container = document.getElementById("tokenActivity");
+        if (!container) return;
+        container.innerHTML = "";
+
+        console.log("Updating token activity with", tokens.length, "tokens");
+
+        if (tokens && tokens.length > 0) {
+          tokens.forEach((token) => {
+            console.log(
+              "Processing token:",
+              token.symbol,
+              "Logo URL:",
+              token.logoURL
+            );
+
+            const row = document.createElement("tr");
+            row.className = "token-table-row";
+            row.setAttribute("data-id", token.id);
+
+            if (token.status === "TWEETED") {
+              row.classList.add("tweeted");
+            } else if (token.status === "failed") {
+              row.classList.add("failed");
+            }
+
+            // Create all cells with proper structure
+            const cells = [
+              createTokenCell(token),
+              createAddressCell(token.address),
+              createMarketCapCell(token.marketCap),
+              createLiquidityCell(token.liquidity),
+              createTimeCell(token.timestamp),
+              createStatusCell(token.status),
+            ];
+
+            // Add all cells to the row
+            cells.forEach((cell) => row.appendChild(cell));
+            container.appendChild(row);
+          });
+        } else {
+          // Create empty state row
+          const emptyRow = document.createElement("tr");
+          const emptyCell = document.createElement("td");
+          emptyCell.colSpan = 6;
+          emptyCell.className = "empty-message";
+          emptyCell.textContent = "No tokens available";
+          emptyRow.appendChild(emptyCell);
+          container.appendChild(emptyRow);
+        }
+      }
+
+      // Helper functions for creating table cells
+      function createTokenCell(token) {
+        const cell = document.createElement("td");
+        cell.className = "token-cell";
+
+        const tokenWrapper = document.createElement("div");
+        tokenWrapper.className = "token-row";
+
+        // Create logo element
+        if (token.logoURL && token.logoURL.trim() !== "") {
+          const logoImg = document.createElement("img");
+          logoImg.className = "token-logo";
+          logoImg.src = token.logoURL;
+          logoImg.alt = token.symbol;
+
+          logoImg.onerror = function () {
+            this.style.display = "none";
+            const placeholder = document.createElement("div");
+            placeholder.className = "token-logo-placeholder";
+            placeholder.textContent = "";
+            placeholder.style.backgroundColor = getRandomColor(token.symbol);
+            this.parentNode.insertBefore(placeholder, this);
+          };
+
+          tokenWrapper.appendChild(logoImg);
+        } else {
+          const placeholder = document.createElement("div");
+          placeholder.className = "token-logo-placeholder";
+          placeholder.textContent = "";
+          placeholder.style.backgroundColor = getRandomColor(token.symbol);
+          tokenWrapper.appendChild(placeholder);
+        }
+
+        // Create name/symbol element
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "token-info";
+
+        const symbolDiv = document.createElement("div");
+        symbolDiv.className = "token-symbol";
+        symbolDiv.textContent = token.symbol;
+        nameDiv.appendChild(symbolDiv);
+
+        tokenWrapper.appendChild(nameDiv);
+        cell.appendChild(tokenWrapper);
+        return cell;
+      }
+
+      function createAddressCell(address) {
+        const cell = document.createElement("td");
+        cell.className = "token-address";
+        cell.textContent = shortenAddress(address);
+        cell.title = address;
+        return cell;
+      }
+
+      function createMarketCapCell(marketCap) {
+        const cell = document.createElement("td");
+        cell.className = "token-mc";
+        cell.textContent = "$" + formatNumber(marketCap);
+        return cell;
+      }
+
+      function createLiquidityCell(liquidity) {
+        const cell = document.createElement("td");
+        cell.className = "token-liq";
+        cell.textContent = "$" + formatNumber(liquidity);
+        return cell;
+      }
+
+      function createTimeCell(timestamp) {
+        const cell = document.createElement("td");
+        cell.className = "token-time";
+        const date = new Date(timestamp);
+        cell.textContent = date.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        return cell;
+      }
+
+      function createStatusCell(status) {
+        const cell = document.createElement("td");
+        cell.className = "token-status";
+        cell.textContent = status.toUpperCase();
+        cell.classList.add(status.toLowerCase());
+        return cell;
+      }
+
+      function updateLatestToken(token) {
+        const container = document.getElementById("latestToken");
+        if (!container || !token) return;
+        container.innerHTML = "";
+
+        console.log(
+          "Updating latest token:",
+          token.symbol,
+          "Logo URL:",
+          token.logoURL
+        );
+
+        // Create main content
+        const contentDiv = document.createElement("div");
+        contentDiv.className = "latest-token-content";
+
+        // Create logo section
+        const logoDiv = document.createElement("div");
+        logoDiv.className = "latest-token-logo";
+
+        if (token.logoURL && token.logoURL.trim() !== "") {
+          const logoImg = document.createElement("img");
+          logoImg.src = token.logoURL;
+          logoImg.alt = token.symbol;
+          logoImg.className = "token-logo";
+
+          // Handle image loading errors
+          logoImg.onerror = function () {
+            console.log(`Latest token logo failed to load: ${token.logoURL}`);
+            this.style.display = "none";
+
+            // Create placeholder
+            const placeholder = document.createElement("div");
+            placeholder.className = "token-logo-placeholder";
+            placeholder.textContent = ""; // No text in placeholder, per requirements
+            placeholder.style.backgroundColor = getRandomColor(token.symbol);
+            logoDiv.appendChild(placeholder);
+          };
+
+          logoDiv.appendChild(logoImg);
+        } else {
+          // Create placeholder
+          const placeholder = document.createElement("div");
+          placeholder.className = "token-logo-placeholder";
+          placeholder.textContent = ""; // No text in placeholder, per requirements
+          placeholder.style.backgroundColor = getRandomColor(token.symbol);
+          logoDiv.appendChild(placeholder);
+        }
+
+        contentDiv.appendChild(logoDiv);
+
+        // Create info section
+        const infoDiv = document.createElement("div");
+        infoDiv.className = "latest-token-info";
+
+        // Token name and symbol
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "latest-token-name";
+        nameDiv.textContent = `${token.name} (${token.symbol})`;
+        infoDiv.appendChild(nameDiv);
+
+        // Token address
+        const addressDiv = document.createElement("div");
+        addressDiv.className = "latest-token-address";
+        addressDiv.textContent = shortenAddress(token.address);
+        addressDiv.title = token.address;
+        infoDiv.appendChild(addressDiv);
+
+        // Token stats
+        const statsDiv = document.createElement("div");
+        statsDiv.className = "latest-token-stats";
+
+        // Market cap
+        const mcDiv = document.createElement("div");
+        mcDiv.textContent = `Market Cap: $${formatNumber(token.marketCap)}`;
+        statsDiv.appendChild(mcDiv);
+
+        // Liquidity
+        const liqDiv = document.createElement("div");
+        liqDiv.textContent = `Liquidity: $${formatNumber(token.liquidity)}`;
+        statsDiv.appendChild(liqDiv);
+
+        // Volume
+        if (token.volume) {
+          const volDiv = document.createElement("div");
+          volDiv.textContent = `Volume: $${formatNumber(token.volume)}`;
+          statsDiv.appendChild(volDiv);
+        }
+
+        // Holders
+        if (token.holders) {
+          const holdersDiv = document.createElement("div");
+          holdersDiv.textContent = `Holders: ${formatNumber(token.holders)}`;
+          statsDiv.appendChild(holdersDiv);
+        }
+
+        // Price
+        if (token.price) {
+          const priceDiv = document.createElement("div");
+          priceDiv.textContent = `Price: $${formatNumber(token.price, 8)}`;
+          statsDiv.appendChild(priceDiv);
+        }
+
+        infoDiv.appendChild(statsDiv);
+        contentDiv.appendChild(infoDiv);
+
+        // Create status section
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "latest-token-status";
+        statusDiv.textContent = token.status.toUpperCase();
+        statusDiv.classList.add(token.status.toLowerCase());
+
+        contentDiv.appendChild(statusDiv);
+        container.appendChild(contentDiv);
+      }
+
+      function addLog(message, level = "info") {
+        const timestamp = new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        const log = { timestamp, level, message };
+
+        if (logsTableBody) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${timestamp}</td>
+            <td><span class="log-level log-level-${level}">${level.toUpperCase()}</span></td>
+            <td>${message}</td>
+          `;
+          logsTableBody.insertBefore(row, logsTableBody.firstChild);
+
+          // Keep only last 100 logs
+          while (logsTableBody.children.length > 100) {
+            logsTableBody.removeChild(logsTableBody.lastChild);
+          }
+        }
+
+        // Emit to server if connected
+        if (socket.connected) {
+          socket.emit("log", log);
+        }
+      }
+
+      function formatCurrency(value) {
+        if (!value && value !== 0) return "$0";
+
+        return new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format(value);
+      }
+
+      function formatAddress(address) {
+        if (!address) return "N/A";
+        if (address.length <= 13) return address;
+
+        return (
+          address.substring(0, 6) +
+          "..." +
+          address.substring(address.length - 6)
+        );
+      }
+
+      function formatTime(dateString) {
+        if (!dateString) return "N/A";
+
+        const date = new Date(dateString);
+        return date.toLocaleTimeString();
+      }
+
+      // Add event listener for DOM loaded to ensure elements are available
+      document.addEventListener("DOMContentLoaded", function () {
+        // Initialize UI elements
+        updateAgentStatus("STOPPED");
+        addLog("Dashboard initialized", "info");
+      });
+
+      // Function to generate a random color based on a string
+      function getRandomColor(str) {
+        // Generate a hash from the string
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+
+        // Convert hash to color
+        let color = "#";
+        for (let i = 0; i < 3; i++) {
+          const value = (hash >> (i * 8)) & 0xff;
+          color += ("00" + value.toString(16)).substr(-2);
+        }
+        return color;
+      }
+
+      // Format number with commas and decimal places
+      function formatNumber(num, decimalPlaces = 2) {
+        if (num === undefined || num === null) return "0";
+
+        // Handle very small numbers for price display
+        if (decimalPlaces > 2 && Math.abs(num) < 0.01) {
+          return num.toFixed(decimalPlaces);
+        }
+
+        // Format with commas for thousands and fixed decimal places
+        return Number(num).toLocaleString("en-US", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: decimalPlaces,
+        });
+      }
+
+      // Shorten address to format: 0x1234...5678
+      function shortenAddress(address) {
+        if (!address) return "Unknown";
+        if (address.length <= 13) return address;
+
+        return (
+          address.substring(0, 6) +
+          "..." +
+          address.substring(address.length - 4)
+        );
+      }
+
+      // Function to update the tweet history display
+      function updateTweetHistory(tweets) {
+        const container = document.getElementById("tweetHistoryContainer");
+        if (!container) return;
+        container.innerHTML = "";
+
+        if (tweets && tweets.length > 0) {
+          tweets.forEach((tweet) => {
+            const tweetItem = document.createElement("div");
+            tweetItem.className = "tweet-item";
+
+            // Create tweet header with token info and time
+            const header = document.createElement("div");
+            header.className = "tweet-header";
+
+            const tokenInfo = document.createElement("div");
+            tokenInfo.className = "tweet-token";
+            tokenInfo.textContent = `$${tweet.tokenSymbol}`;
+
+            const tweetTime = document.createElement("div");
+            tweetTime.className = "tweet-time";
+            const date = new Date(tweet.timestamp);
+            tweetTime.textContent = date.toLocaleString();
+
+            header.appendChild(tokenInfo);
+            header.appendChild(tweetTime);
+
+            // Create tweet content
+            const content = document.createElement("div");
+            content.className = "tweet-content";
+            content.textContent = tweet.tweetText;
+
+            // Create tweet link
+            const link = document.createElement("div");
+            link.className = "tweet-link";
+
+            const anchor = document.createElement("a");
+            anchor.href = tweet.tweetUrl;
+            anchor.target = "_blank";
+            anchor.textContent = "View on Twitter";
+
+            link.appendChild(anchor);
+
+            // Add all elements to the tweet item
+            tweetItem.appendChild(header);
+            tweetItem.appendChild(content);
+            tweetItem.appendChild(link);
+
+            // Add the tweet item to the container
+            container.appendChild(tweetItem);
+          });
+        } else {
+          const emptyState = document.createElement("div");
+          emptyState.className = "empty-message";
+          emptyState.textContent = "No tweets have been posted yet";
+          container.appendChild(emptyState);
+        }
+      }
+    </script>
+  </body>
+</html>

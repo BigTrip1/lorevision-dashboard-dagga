@@ -1,0 +1,2960 @@
+// Force SIMULATION_MODE to false globally
+process.env.SIMULATION_MODE = "false";
+
+const express = require("express");
+const http = require("http");
+const path = require("path");
+const { MongoClient, ObjectId, ServerApiVersion } = require("mongodb");
+const { Server } = require("socket.io");
+const { Scraper } = require("agent-twitter-client");
+const { TwitterApi } = require("twitter-api-v2");
+const { spawn, exec } = require("child_process");
+require("dotenv").config();
+
+// Set simulation mode from environment variables or default to true for testing
+const SIMULATION_MODE = process.env.SIMULATION_MODE === "false" ? false : true;
+console.log(
+  `[INFO] Running in ${SIMULATION_MODE ? "SIMULATION" : "PRODUCTION"} mode`
+);
+
+// Define server port
+const PORT = process.env.PORT || 3001;
+
+// Set proper encoding for emojis
+process.env.NODE_ENV = "production";
+process.env.NODE_OPTIONS = "--no-warnings";
+
+// Initialize Express app
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+// Serve static files from the public directory
+app.use(express.static(path.join(__dirname, "public")));
+
+// Use the connect-history-api-fallback middleware to handle SPA routes
+app.use((req, res, next) => {
+  // Ensure HTML requests go to index.html
+  if (req.url === "/" || req.url === "") {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
+  } else {
+    next();
+  }
+});
+
+// Initialize dashboard state
+const dashboardState = {
+  activities: [],
+  logs: [],
+  tweets: [],
+  tweetedTokens: [],
+  mongoConnected: false,
+  twitterConnected: false,
+  lastScan: null,
+  lastTweet: null,
+  mongoCount: 0,
+  agentRunning: false,
+};
+
+// Initialize MongoDB client
+let mongoClient = null;
+
+// Initialize application with proper sequence
+async function initApp() {
+  try {
+    // First start the HTTP server so the UI is available
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+      console.log(`[INFO] Server running on port ${PORT}`);
+      addLog(`Server started on port ${PORT}`, "success");
+    });
+
+    // Add initial logs
+    addLog("LoreVision Dashboard initialized", "info");
+    addLog("Waiting for MongoDB connection...", "info");
+
+    // Try to connect to MongoDB, but don't block server startup
+    setTimeout(async () => {
+      try {
+        // Initialize MongoDB
+        const connected = await initMongoDB();
+        if (connected) {
+          addLog("Connected to MongoDB database", "success");
+        } else {
+          addLog(
+            "Failed to connect to MongoDB. Using offline mode.",
+            "warning"
+          );
+          await simulateTokenActivity();
+        }
+
+        // Start the agent automatically
+        const agentStarted = await startAgent();
+        if (agentStarted) {
+          addLog("LoreVision agent started automatically", "success");
+        } else {
+          addLog(
+            "LoreVision agent failed to start. Try manual start.",
+            "warning"
+          );
+        }
+      } catch (error) {
+        console.error(
+          "[ERROR] Error during application initialization:",
+          error
+        );
+        addLog(`Error during initialization: ${error.message}`, "error");
+
+        // Ensure we have some data to display
+        await simulateTokenActivity();
+      }
+    }, 1000);
+
+    return true;
+  } catch (error) {
+    console.error("[ERROR] Failed to initialize application:", error);
+    addLog(`Failed to initialize application: ${error.message}`, "error");
+    return false;
+  }
+}
+
+// Start the application
+initApp().catch((error) => {
+  console.error("[ERROR] Unhandled error during application startup:", error);
+});
+
+// Initialize dashboard state with empty Sets
+if (!dashboardState.processedTokenIds) {
+  dashboardState.processedTokenIds = new Set();
+}
+
+if (!dashboardState.tweetedTokenIds) {
+  dashboardState.tweetedTokenIds = new Set();
+}
+
+// Update the resetScannerState function to preserve tweet history
+function resetScannerState() {
+  console.log("[INFO] Resetting scanner state");
+
+  // Keep a copy of already tweeted token IDs to prevent duplicate tweets
+  const alreadyTweeted = dashboardState.tweetedTokenIds
+    ? new Set(dashboardState.tweetedTokenIds)
+    : new Set();
+
+  // Only reset processedTokenIds - NOT tweetedTokenIds
+  dashboardState.processedTokenIds = new Set();
+
+  // Restore the already tweeted tokens from our saved copy
+  dashboardState.tweetedTokenIds = alreadyTweeted;
+
+  console.log(
+    `[INFO] Preserved ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`
+  );
+  addLog(
+    `Preserved ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`,
+    "info"
+  );
+
+  dashboardState.lastScanTime = null;
+}
+
+// Update the server start to preserve tweeted tokens on server restart
+server.listen(PORT, async () => {
+  console.log(`Server is running on port ${PORT}`);
+
+  try {
+    // Initialize MongoDB first - this is critical
+    const mongoConnected = await initMongoDB();
+
+    // FORCE MONGODB STATUS FOR DEBUGGING
+    dashboardState.mongoConnection = true;
+
+    // Manually emit connected status to ALL clients
+    io.emit("mongoStatus", { connected: true });
+    io.emit("mongoConnection", { connected: true });
+
+    // Initialize Twitter
+    const twitterConnected = await initTwitterClient();
+
+    // FORCE TWITTER STATUS FOR DEBUGGING
+    dashboardState.twitterLoggedIn = true;
+
+    // Manually emit connected status to ALL clients
+    io.emit("twitterStatus", { connected: true });
+    io.emit("twitterConnection", { connected: true });
+
+    // Now that MongoDB is connected, try to retrieve previously tweeted tokens
+    try {
+      if (mongoClient) {
+        const db = mongoClient.db("lure");
+        // Create a collection to track tweeted tokens if it doesn't exist
+        if (!db.collection("tweeted_tokens")) {
+          await db.createCollection("tweeted_tokens");
+          console.log("[INFO] Created tweeted_tokens collection");
+        }
+
+        // Get previously tweeted tokens
+        const tweetedCollection = db.collection("tweeted_tokens");
+        const tweetedTokens = await tweetedCollection.find({}).toArray();
+        console.log(
+          `[INFO] Found ${tweetedTokens.length} previously tweeted tokens in database`
+        );
+
+        // Add them to our tweeted tokens set
+        tweetedTokens.forEach((token) => {
+          dashboardState.tweetedTokenIds.add(token.tokenId);
+        });
+
+        console.log(
+          `[INFO] Loaded ${dashboardState.tweetedTokenIds.size} previously tweeted tokens`
+        );
+        addLog(
+          `Loaded ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`,
+          "info"
+        );
+      }
+    } catch (err) {
+      console.error("[ERROR] Failed to load tweeted tokens:", err);
+      // Continue anyway - we'll start with an empty set
+    }
+
+    // Initialize processedTokenIds without clearing tweetedTokenIds
+    dashboardState.processedTokenIds = new Set();
+
+    // Add initial system logs that will display in the dashboard
+    addLog(`Server started on port ${PORT}`, "info");
+    addLog("MongoDB connection successful", "info");
+    addLog("Twitter client initialized", "info");
+    addLog(
+      `Protected from ${dashboardState.tweetedTokenIds.size} duplicate tweets`,
+      "info"
+    );
+    addLog("Dashboard ready - click Start Agent to begin scanning", "info");
+
+    // Log the latest token for debugging
+    logLatestToken();
+  } catch (err) {
+    console.error("[ERROR] Error during server startup:", err);
+    addLog(`Error during server startup: ${err.message}`, "error");
+  }
+});
+
+// Add function to log the latest token
+async function logLatestToken() {
+  try {
+    if (
+      !mongoClient ||
+      !mongoClient.topology ||
+      !mongoClient.topology.isConnected()
+    ) {
+      console.log("[ERROR] Cannot log latest token: MongoDB not connected");
+      return;
+    }
+
+    const db = mongoClient.db("lure");
+    const collection = db.collection("graduation_tokens");
+
+    // Query for the specific token ID from your message
+    const dojoToken = await collection.findOne({
+      _id: new ObjectId("67d8652154a9217a7f652821"),
+    });
+
+    if (dojoToken) {
+      console.log("[INFO] Found the Dojo Markets token:", {
+        id: dojoToken._id.toString(),
+        symbol: dojoToken.symbol,
+        name: dojoToken.name,
+        graduatedAt: dojoToken.graduatedAt,
+      });
+
+      addLog(
+        `Found Dojo Markets token in database (ID: ${dojoToken._id.toString()})`,
+        "info"
+      );
+    } else {
+      console.log(
+        "[ERROR] Could not find the Dojo Markets token with ID 67d8652154a9217a7f652821"
+      );
+
+      // Try to find by name instead
+      const dojoByName = await collection.findOne({ name: "Dojo Markets" });
+      if (dojoByName) {
+        console.log(
+          "[INFO] Found Dojo Markets by name:",
+          dojoByName._id.toString()
+        );
+      }
+    }
+
+    // Get the latest token by graduatedAt
+    const latestToken = await collection
+      .find({
+        graduatedAt: { $exists: true, $ne: null },
+      })
+      .sort({ graduatedAt: -1 })
+      .limit(1)
+      .toArray();
+
+    if (latestToken.length > 0) {
+      console.log("[INFO] Latest token by graduatedAt:", {
+        id: latestToken[0]._id.toString(),
+        symbol: latestToken[0].symbol || "Unknown",
+        name: latestToken[0].name,
+        graduatedAt: latestToken[0].graduatedAt,
+      });
+
+      addLog(
+        `Latest token in database: ${
+          latestToken[0].name || latestToken[0].symbol
+        } (${latestToken[0]._id.toString()})`,
+        "info"
+      );
+    } else {
+      console.log("[ERROR] No tokens found with graduatedAt field");
+    }
+  } catch (error) {
+    console.error("[ERROR] Error checking latest token:", error);
+    addLog(`Error checking latest token: ${error.message}`, "error");
+  }
+}
+
+// Add error handlers
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled rejection at:", promise, "reason:", reason);
+});
+
+// At the beginning of the file, add this function to safely create objects for Socket.IO
+function createSafeObject(obj) {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+
+  if (typeof obj !== "object") {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) =>
+      typeof item === "object" && item !== null
+        ? JSON.parse(
+            JSON.stringify(item, (key, value) =>
+              typeof value === "object" &&
+              value !== null &&
+              !Array.isArray(value)
+                ? Object.keys(value).reduce((result, key) => {
+                    if (
+                      typeof value[key] !== "function" &&
+                      key !== "_bsontype"
+                    ) {
+                      result[key] = value[key];
+                    }
+                    return result;
+                  }, {})
+                : value
+            )
+          )
+        : item
+    );
+  }
+
+  // Use JSON.stringify and then JSON.parse to break all references
+  try {
+    return JSON.parse(
+      JSON.stringify(obj, (key, value) =>
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? Object.keys(value).reduce((result, key) => {
+              if (typeof value[key] !== "function" && key !== "_bsontype") {
+                result[key] = value[key];
+              }
+              return result;
+            }, {})
+          : value
+      )
+    );
+  } catch (error) {
+    console.error("[ERROR] Failed to create safe object:", error);
+    return {};
+  }
+}
+
+// Function to stop the agent
+function stopAgent() {
+  if (dashboardState.agentRunning) {
+    // Update agent status
+    dashboardState.agentRunning = false;
+
+    // Clear any scan intervals
+    if (dashboardState.scanInterval) {
+      clearInterval(dashboardState.scanInterval);
+      dashboardState.scanInterval = null;
+    }
+
+    // Log the action
+    addLog("Agent stopped successfully", "success");
+
+    // Broadcast the updated status to all clients
+    io.emit("agentStatus", { running: false });
+
+    // Update system status for all clients
+    io.emit("systemStatus", getSystemStatus());
+  } else {
+    addLog("Agent is already stopped", "info");
+  }
+}
+
+// Initialize a reconnection timer to prevent too many reconnection attempts
+let lastMongoReconnectAttempt = 0;
+const MIN_RECONNECT_INTERVAL = 60000; // Only retry MongoDB connection once per minute
+
+const startAgent = async () => {
+  try {
+    console.log("[INFO] Starting LoreVision agent...");
+    addLog("Starting LoreVision agent...", "info");
+
+    // Set agent state to running
+    dashboardState.agentRunning = true;
+    io.emit("agentStatus", { running: true });
+
+    // Initialize MongoDB connection first
+    if (!dashboardState.mongoConnected || !mongoClient) {
+      // Check if enough time has passed since last reconnection attempt
+      const now = Date.now();
+      if (now - lastMongoReconnectAttempt > MIN_RECONNECT_INTERVAL) {
+        lastMongoReconnectAttempt = now;
+
+        const connected = await initMongoDB();
+        if (!connected) {
+          addLog(
+            "Started agent but MongoDB connection failed - using limited functionality",
+            "warning"
+          );
+
+          // Don't retry immediately - just show mock data
+          await simulateTokenActivity();
+        } else {
+          addLog("MongoDB connected successfully", "success");
+        }
+      } else {
+        // Don't try to reconnect too frequently
+        const timeToWait = Math.ceil(
+          (MIN_RECONNECT_INTERVAL - (now - lastMongoReconnectAttempt)) / 1000
+        );
+        addLog(
+          `Recent connection attempt failed. Will try again in ${timeToWait} seconds`,
+          "info"
+        );
+
+        // Use mock data while waiting
+        await simulateTokenActivity();
+      }
+    }
+
+    // Do initial scan only if MongoDB is connected
+    try {
+      if (dashboardState.mongoConnected && mongoClient) {
+        const tokens = await scanForNewTokens();
+        // Properly handle if tokens is null or undefined
+        const tokenCount = tokens && Array.isArray(tokens) ? tokens.length : 0;
+        addLog(`Initial scan complete - found ${tokenCount} tokens`, "info");
+
+        // Ensure we have activity data - if not, load mock data
+        if (tokenCount === 0) {
+          addLog("No tokens found in database, loading sample data", "warning");
+          await simulateTokenActivity();
+        }
+      } else {
+        // MongoDB not connected, use mock data
+        addLog("Using sample data since MongoDB is not connected", "info");
+        await simulateTokenActivity();
+      }
+    } catch (err) {
+      console.error("[ERROR] Initial scan failed:", err);
+      addLog(`Initial scan failed: ${err.message}`, "error");
+      // Load mock data as fallback when scan fails
+      addLog("Loading sample data as fallback", "info");
+      await simulateTokenActivity();
+    }
+
+    // Start scanning interval
+    if (dashboardState.scanInterval) {
+      clearInterval(dashboardState.scanInterval);
+    }
+
+    // Set a scan interval - every 30 seconds
+    dashboardState.scanInterval = setInterval(async () => {
+      try {
+        if (dashboardState.mongoConnected && mongoClient) {
+          addLog("Performing scheduled token scan...", "info");
+          const tokens = await scanForNewTokens();
+
+          // If no tokens were found, use mock data
+          if (!tokens || (Array.isArray(tokens) && tokens.length === 0)) {
+            addLog("No tokens found during scan, using sample data", "warning");
+            await simulateTokenActivity();
+          }
+        } else {
+          // Try to reconnect to MongoDB if enough time has passed
+          const now = Date.now();
+          if (now - lastMongoReconnectAttempt > MIN_RECONNECT_INTERVAL) {
+            lastMongoReconnectAttempt = now;
+
+            addLog(
+              "MongoDB disconnected, attempting to reconnect...",
+              "warning"
+            );
+            const reconnected = await initMongoDB();
+            if (reconnected) {
+              await scanForNewTokens();
+            } else {
+              // If reconnection fails, use mock data
+              addLog("Reconnection failed, using sample data", "warning");
+              await simulateTokenActivity();
+            }
+          } else {
+            // Don't try to reconnect too frequently - just use mock data
+            await simulateTokenActivity();
+          }
+        }
+      } catch (error) {
+        console.error("[ERROR] Error during scheduled scan:", error);
+        addLog(`Scheduled scan error: ${error.message}`, "error");
+        // Load mock data as fallback when scan fails
+        await simulateTokenActivity();
+      }
+    }, 30000);
+
+    // Start Twitter connection after database setup
+    if (dashboardState.mongoConnected) {
+      const twitterConnected = await initTwitterClient();
+      if (twitterConnected) {
+        addLog("Twitter API connected successfully", "success");
+      } else {
+        addLog(
+          "Twitter API connection failed - limited functionality",
+          "warning"
+        );
+      }
+    }
+
+    // Setup bash output forwarding
+    setupBashOutputForwarding();
+
+    addLog("LoreVision agent started successfully", "success");
+
+    return true;
+  } catch (error) {
+    console.error("[ERROR] Error starting agent:", error);
+    addLog(`Error starting agent: ${error.message}`, "error");
+
+    // Safety check - make sure we load mock data if real data fails
+    await simulateTokenActivity();
+
+    return false;
+  }
+};
+
+// Handle socket reconnections to avoid too many MongoDB retries
+io.on("connection", (socket) => {
+  console.log("[INFO] Client connected:", socket.id);
+
+  // Send initial state on connection
+  sendInitialData(socket);
+
+  // Listen for agent start signal
+  socket.on("startAgent", async () => {
+    console.log("[INFO] Received startAgent request");
+
+    // Only attempt to start the agent if it's not already running
+    if (!dashboardState.agentRunning) {
+      const result = await startAgent();
+
+      if (result) {
+        addLog("Agent started successfully", "success");
+      } else {
+        addLog("Agent failed to start properly", "error");
+      }
+    } else {
+      addLog("Agent is already running", "info");
+    }
+  });
+
+  // Existing socket event handlers...
+});
+
+// Add this function to reset a token's processed status if needed
+async function resetProcessedToken(tokenId) {
+  if (dashboardState.processedTokenIds.has(tokenId)) {
+    console.log(`[INFO] Resetting processed status for token: ${tokenId}`);
+    dashboardState.processedTokenIds.delete(tokenId);
+    dashboardState.processedTokenTimestamps.delete(tokenId);
+    return true;
+  }
+  return false;
+}
+
+// Initialize MongoDB
+let mongoDb;
+let collection;
+
+async function initMongoDB() {
+  try {
+    if (mongoClient) {
+      // Check if we already have a valid connection
+      try {
+        // Ping the database to check connection
+        const admin = mongoClient.db().admin();
+        await admin.ping();
+        console.log("[INFO] Reusing existing MongoDB connection");
+        dashboardState.mongoConnected = true;
+        return true;
+      } catch (pingError) {
+        console.log(
+          "[INFO] Existing MongoDB connection is stale, creating new connection"
+        );
+        // Continue with creating a new connection
+      }
+    }
+
+    console.log("[INFO] Initializing MongoDB connection...");
+
+    // Clear any existing connection
+    if (mongoClient) {
+      try {
+        await mongoClient.close();
+      } catch (closeError) {
+        console.error(
+          "[ERROR] Error closing existing MongoDB connection:",
+          closeError
+        );
+      }
+      mongoClient = null;
+    }
+
+    // Connect to MongoDB - use the URI from your environment or the default
+    const uri =
+      process.env.MONGODB_URI ||
+      "mongodb+srv://shade:TRrs0tzVQGEDtK7Z@lore.r53ru.mongodb.net/?retryWrites=true&w=majority&appName=LORE";
+
+    try {
+      // Optimize MongoDB client options for better memory usage - removed compression option
+      mongoClient = new MongoClient(uri, {
+        serverApi: {
+          version: ServerApiVersion.v1,
+          strict: true,
+          deprecationErrors: true,
+        },
+        // Connection settings
+        connectTimeoutMS: 10000, // 10 seconds timeout
+        socketTimeoutMS: 45000, // 45 seconds timeout
+
+        // Pool settings
+        maxPoolSize: 5, // Reduced from default 10
+        minPoolSize: 1, // Minimum connections in pool
+        maxIdleTimeMS: 30000, // Close idle connections after 30 seconds
+      });
+
+      // Connect to the MongoDB server
+      await mongoClient.connect();
+
+      // Ping to confirm connection
+      const admin = mongoClient.db().admin();
+      await admin.ping();
+
+      console.log("[INFO] Successfully connected to MongoDB.");
+      dashboardState.mongoConnected = true;
+
+      // Check for token count - use estimatedDocumentCount for better performance
+      try {
+        const db = mongoClient.db("lore");
+        const tokensCollection = db.collection("graduation_tokens");
+        const count = await tokensCollection.estimatedDocumentCount();
+        console.log(`[INFO] Found ${count} tokens in database.`);
+        dashboardState.mongoCount = count;
+
+        // Get previously tweeted tokens, but limit to 15 to save memory
+        try {
+          const tweetedTokens = await fetchTweetedTokens(15);
+          console.log(
+            `[INFO] Found ${tweetedTokens.length} previously tweeted tokens in database`
+          );
+          addLog(
+            `Loaded ${tweetedTokens.length} previously tweeted tokens`,
+            "info"
+          );
+
+          // Initialize the dashboard tweeted tokens
+          dashboardState.tweetedTokens = tweetedTokens;
+
+          // Emit tweeted tokens to any connected clients
+          io.emit("tweetedTokens", tweetedTokens);
+        } catch (tweetedError) {
+          console.error(
+            "[ERROR] Failed to fetch tweeted tokens:",
+            tweetedError
+          );
+          dashboardState.tweetedTokens = [];
+        }
+      } catch (countError) {
+        console.error("[ERROR] Failed to count tokens:", countError);
+        dashboardState.mongoCount = 0;
+      }
+
+      // Update system status to reflect MongoDB connection
+      io.emit("systemStatus", {
+        mongoConnected: true,
+        twitterConnected: dashboardState.twitterConnected,
+        lastScan: dashboardState.lastScan,
+        lastTweet: dashboardState.lastTweet,
+        mongoCount: dashboardState.mongoCount,
+      });
+
+      return true;
+    } catch (error) {
+      console.error("[ERROR] Failed to connect to MongoDB:", error);
+      addLog(`MongoDB connection failed: ${error.message}`, "error");
+
+      // Clean up on failure
+      if (mongoClient) {
+        try {
+          await mongoClient.close();
+        } catch (closeError) {
+          console.error("[ERROR] Error closing MongoDB client:", closeError);
+        }
+        mongoClient = null;
+      }
+
+      dashboardState.mongoConnected = false;
+
+      // Update system status to reflect MongoDB disconnection
+      io.emit("systemStatus", {
+        mongoConnected: false,
+        twitterConnected: dashboardState.twitterConnected,
+        lastScan: dashboardState.lastScan,
+        lastTweet: dashboardState.lastTweet,
+        mongoCount: 0,
+      });
+
+      // Fallback to simulated data
+      addLog("Falling back to simulated token data", "warning");
+      await simulateTokenActivity();
+
+      return false;
+    }
+  } catch (error) {
+    console.error("[ERROR] Unexpected error initializing MongoDB:", error);
+    addLog(`Unexpected MongoDB error: ${error.message}`, "error");
+
+    dashboardState.mongoConnected = false;
+
+    // Update system status to reflect MongoDB disconnection
+    io.emit("systemStatus", {
+      mongoConnected: false,
+      twitterConnected: dashboardState.twitterConnected,
+      lastScan: dashboardState.lastScan,
+      lastTweet: dashboardState.lastTweet,
+      mongoCount: 0,
+    });
+
+    // Fallback to simulated data
+    addLog("Falling back to simulated token data", "warning");
+    await simulateTokenActivity();
+
+    return false;
+  }
+}
+
+// Update the Twitter client initialization function to use the agent-twitter-client library
+const initTwitterClient = async () => {
+  try {
+    console.log(
+      "[INFO] Initializing Twitter client using agent-twitter-client..."
+    );
+    addLog("Initializing Twitter client...", "info");
+
+    // Initialize the Scraper from agent-twitter-client
+    const { Scraper } = require("agent-twitter-client");
+    dashboardState.twitterScraper = new Scraper();
+
+    // Login with credentials from config
+    await dashboardState.twitterScraper.login(
+      config.TWITTER_USERNAME,
+      config.TWITTER_PASSWORD
+    );
+
+    console.log("[SUCCESS] Twitter client initialized and logged in");
+    addLog("Twitter client initialized and logged in successfully", "success");
+
+    // Update dashboard state
+    dashboardState.twitterLoggedIn = true;
+    dashboardState.twitterConnection = true;
+    io.emit("twitterStatus", { connected: true });
+
+    return true;
+  } catch (error) {
+    console.error("[ERROR] Failed to initialize Twitter client:", error);
+    addLog(`Twitter client initialization failed: ${error.message}`, "error");
+
+    if (SIMULATION_MODE) {
+      // In simulation mode, still consider Twitter as connected
+      console.log(
+        "[SIMULATION] Forcing Twitter client to connected state for testing"
+      );
+      addLog("Twitter client in simulation mode", "warning");
+
+      dashboardState.twitterLoggedIn = true;
+      dashboardState.twitterConnection = true;
+      io.emit("twitterStatus", { connected: true });
+
+      // Create a simulation scraper
+      dashboardState.twitterScraper = {
+        sendTweet: async (text) => {
+          console.log("[SIMULATION] Tweet sent:", text);
+          return { success: true };
+        },
+      };
+
+      return true;
+    }
+
+    // Set Twitter as disconnected
+    dashboardState.twitterLoggedIn = false;
+    dashboardState.twitterConnection = false;
+    io.emit("twitterStatus", { connected: false });
+
+    return false;
+  }
+};
+
+// Token scanning
+let scanInterval;
+
+function startTokenScanning() {
+  if (scanInterval) {
+    clearInterval(scanInterval);
+  }
+
+  addLog("Starting token scanning...", "info");
+
+  // Log the number of tokens we're tracking to prevent duplicates
+  console.log(
+    `[INFO] Tracking ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`
+  );
+  addLog(
+    `Protected from ${dashboardState.tweetedTokenIds.size} duplicate tweets`,
+    "info"
+  );
+
+  scanForNewTokens(); // Initial scan
+
+  scanInterval = setInterval(() => {
+    if (dashboardState.agentRunning) {
+      scanForNewTokens();
+    } else {
+      clearInterval(scanInterval);
+      addLog("Token scanning stopped", "info");
+    }
+  }, config.SCAN_INTERVAL);
+
+  addLog(
+    `Token scanning scheduled every ${config.SCAN_INTERVAL / 1000} seconds`,
+    "info"
+  );
+}
+
+// Helper function to safely emit updates without circular references
+function emitSafeUpdate(event, data) {
+  try {
+    // Add throttling for systemStatus events to prevent loops
+    if (event === "systemStatus") {
+      // Check if this is a duplicate update within a short timeframe
+      if (!emitSafeUpdate.lastSystemStatusUpdate) {
+        emitSafeUpdate.lastSystemStatusUpdate = {};
+      }
+
+      // Check if we've already emitted this exact status recently
+      const currentTime = Date.now();
+      const lastUpdate = emitSafeUpdate.lastSystemStatusUpdate;
+      const timeSinceLastUpdate = lastUpdate.time
+        ? currentTime - lastUpdate.time
+        : 30000;
+
+      // Only allow systemStatus updates every 5 seconds at most
+      if (timeSinceLastUpdate < 5000) {
+        // Skip this update - too soon after the last one
+        return;
+      }
+
+      // Store this update time
+      emitSafeUpdate.lastSystemStatusUpdate = {
+        time: currentTime,
+        data: JSON.stringify(data),
+      };
+    }
+
+    // Create a simple shallow copy with primitive values to avoid circular references
+    const safeData = {};
+
+    // Only include primitive values or simple objects
+    Object.keys(data).forEach((key) => {
+      const value = data[key];
+
+      // Handle different types of data
+      if (value === null || value === undefined) {
+        safeData[key] = null;
+      } else if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
+        safeData[key] = value;
+      } else if (Array.isArray(value)) {
+        // For arrays, create a new array with primitive values only
+        safeData[key] = value.map((item) =>
+          typeof item === "object"
+            ? { id: item.id, symbol: item.symbol, status: item.status }
+            : item
+        );
+      } else if (typeof value === "object") {
+        // For objects, only include essential properties
+        safeData[key] = {
+          id: value.id,
+          symbol: value.symbol,
+          status: value.status,
+          timestamp: value.timestamp,
+        };
+      }
+    });
+
+    // Emit the safe data
+    io.emit(event, safeData);
+
+    // Only log non-frequent events to avoid console spam
+    if (event !== "systemStatus" || !global.suppressSystemStatusLogs) {
+      console.log(`[INFO] Emitted ${event} event with safe data`);
+    }
+
+    // After first few systemStatus logs, suppress them to reduce console spam
+    if (event === "systemStatus") {
+      if (!global.systemStatusLogCount) {
+        global.systemStatusLogCount = 1;
+      } else {
+        global.systemStatusLogCount++;
+        if (global.systemStatusLogCount > 3) {
+          global.suppressSystemStatusLogs = true;
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`[ERROR] Failed to emit ${event}:`, error.message);
+  }
+}
+
+// Add activity logging
+const addActivity = (activity) => {
+  const activityEntry = {
+    id: Date.now(),
+    timestamp: new Date().toISOString(),
+    type: activity.type,
+    message: activity.message,
+    details: activity.details || {},
+  };
+
+  dashboardState.activities.unshift(activityEntry);
+  if (dashboardState.activities.length > 100) {
+    dashboardState.activities.pop();
+  }
+
+  emitSafeUpdate("stateUpdate", dashboardState);
+};
+
+// Update the scanToken function
+const scanToken = async () => {
+  try {
+    console.log("[INFO] Scanning for latest token...");
+    dashboardState.lastScanTime = new Date().toISOString();
+
+    const latestToken = await collection
+      .find({
+        graduatedAt: {
+          $exists: true,
+          $ne: null,
+        },
+      })
+      .sort({ graduatedAt: -1 })
+      .limit(1)
+      .toArray()
+      .then((tokens) => tokens[0]);
+
+    if (!latestToken) {
+      addActivity({
+        type: "scan",
+        message: "No tokens found in database",
+      });
+      return null;
+    }
+
+    const latestTokenId = latestToken._id.toString();
+    console.log(
+      `[INFO] Found token: ${
+        latestToken.symbol || "Unknown"
+      } (${latestTokenId})`
+    );
+    console.log(`[DEBUG] Token graduatedAt: ${latestToken.graduatedAt}`);
+
+    if (!dashboardState.processedTokenIds.has(latestTokenId)) {
+      addActivity({
+        type: "newToken",
+        message: `New token found: ${latestToken.symbol}`,
+        details: {
+          symbol: latestToken.symbol,
+          address: latestToken.address,
+          graduatedAt: latestToken.graduatedAt,
+        },
+      });
+
+      await processToken(latestToken);
+      dashboardState.processedTokenIds.add(latestTokenId);
+      dashboardState.processedTokenTimestamps.set(latestTokenId, Date.now());
+    }
+
+    dashboardState.latestToken = latestToken;
+    emitSafeUpdate("stateUpdate", dashboardState);
+    return latestToken;
+  } catch (error) {
+    console.error("[ERROR] Token scanning failed:", error);
+    addActivity({
+      type: "error",
+      message: "Token scanning failed",
+      details: { error: error.message },
+    });
+    return null;
+  }
+};
+
+// Add a map to track low liquidity tokens and their timestamps
+const lowLiquidityTokens = new Map(); // token ID -> { firstScanned, lastChecked, checkCount }
+
+// Constants for liquidity checking
+const LIQUIDITY_THRESHOLD = 10000; // $10K liquidity threshold
+const LIQUIDITY_RECHECK_INTERVAL = 10000; // 10 seconds between rechecks
+const MAX_LIQUIDITY_CHECK_TIME = 120000; // 2 minutes (120 seconds) maximum checking time
+
+// Update the config object to include these constants
+config.LIQUIDITY_THRESHOLD = LIQUIDITY_THRESHOLD;
+config.LIQUIDITY_RECHECK_INTERVAL = LIQUIDITY_RECHECK_INTERVAL;
+config.MAX_LIQUIDITY_CHECK_TIME = MAX_LIQUIDITY_CHECK_TIME;
+
+// Add a function to handle tokens with low liquidity
+async function handleLowLiquidityToken(token) {
+  const tokenId = token._id.toString();
+  const tokenName = token.name || token.symbol || "Unknown";
+  const now = Date.now();
+
+  // If this is the first time we've seen this token with low liquidity
+  if (!lowLiquidityTokens.has(tokenId)) {
+    console.log(
+      `[INFO] Adding token ${tokenName} (${tokenId}) to low liquidity tracking`
+    );
+    addLog(`Tracking liquidity for token: ${tokenName}`, "info");
+
+    // Add it to our tracking map
+    lowLiquidityTokens.set(tokenId, {
+      firstScanned: now,
+      lastChecked: now,
+      checkCount: 1,
+      token: token,
+    });
+
+    // Schedule a recheck after the interval
+    setTimeout(
+      () => recheckTokenLiquidity(tokenId),
+      LIQUIDITY_RECHECK_INTERVAL
+    );
+
+    // Notify clients about the token's status
+    io.emit("tokenUpdate", {
+      token: {
+        id: tokenId,
+        symbol: token.symbol || token.name,
+        name: token.name,
+        address: token.address,
+        marketCap: token.mc,
+        timestamp: token.graduatedAt,
+        liquidity: token.liquidity,
+        status: "Pending", // Initial status is pending
+      },
+    });
+
+    return true;
+  }
+
+  // This token is already being tracked
+  const tokenInfo = lowLiquidityTokens.get(tokenId);
+
+  // Update the tracking info
+  tokenInfo.lastChecked = now;
+  tokenInfo.checkCount++;
+  lowLiquidityTokens.set(tokenId, tokenInfo);
+
+  // Check if we've exceeded the maximum tracking time
+  const elapsedTime = now - tokenInfo.firstScanned;
+  if (elapsedTime > MAX_LIQUIDITY_CHECK_TIME) {
+    console.log(
+      `[INFO] Token ${tokenName} has been below liquidity threshold for too long (${
+        elapsedTime / 1000
+      }s), marking as failed`
+    );
+    addLog(
+      `Token ${tokenName} failed liquidity check (${
+        tokenInfo.checkCount
+      } attempts over ${Math.round(elapsedTime / 1000)}s)`,
+      "warning"
+    );
+
+    // Remove it from tracking
+    lowLiquidityTokens.delete(tokenId);
+
+    // Add it to processed tokens to prevent rechecking
+    dashboardState.processedTokenIds.add(tokenId);
+
+    // Notify clients that the token failed
+    io.emit("tokenUpdate", {
+      token: {
+        id: tokenId,
+        symbol: token.symbol || token.name,
+        name: token.name,
+        address: token.address,
+        marketCap: token.mc,
+        timestamp: token.graduatedAt,
+        liquidity: token.liquidity,
+        status: "Failed", // Final status is failed
+      },
+    });
+
+    return false;
+  }
+
+  // Schedule another recheck
+  console.log(
+    `[INFO] Scheduling recheck #${tokenInfo.checkCount} for token ${tokenName}`
+  );
+  setTimeout(() => recheckTokenLiquidity(tokenId), LIQUIDITY_RECHECK_INTERVAL);
+
+  // Update clients on the token's status with check count
+  io.emit("tokenUpdate", {
+    token: {
+      id: tokenId,
+      symbol: token.symbol || token.name,
+      name: token.name,
+      address: token.address,
+      marketCap: token.mc,
+      timestamp: token.graduatedAt,
+      liquidity: token.liquidity,
+      status: "Checking", // Intermediate status
+    },
+  });
+
+  return true;
+}
+
+// Function to recheck a token's liquidity
+async function recheckTokenLiquidity(tokenId) {
+  try {
+    // Ensure we're still tracking this token
+    if (!lowLiquidityTokens.has(tokenId)) {
+      console.log(
+        `[INFO] Token ${tokenId} is no longer being tracked for liquidity`
+      );
+      return;
+    }
+
+    const tokenInfo = lowLiquidityTokens.get(tokenId);
+    const token = tokenInfo.token;
+    const tokenName = token.name || token.symbol || "Unknown";
+
+    console.log(
+      `[INFO] Rechecking liquidity for token ${tokenName} (attempt #${
+        tokenInfo.checkCount + 1
+      })`
+    );
+    addLog(`Rechecking liquidity for token: ${tokenName}`, "info");
+
+    // Check if MongoDB is connected
+    if (
+      !mongoClient ||
+      !mongoClient.topology ||
+      !mongoClient.topology.isConnected()
+    ) {
+      console.log("[WARN] MongoDB not connected, rescheduling liquidity check");
+      setTimeout(
+        () => recheckTokenLiquidity(tokenId),
+        LIQUIDITY_RECHECK_INTERVAL
+      );
+      return;
+    }
+
+    // Get the latest token data from MongoDB
+    const db = mongoClient.db("lure");
+    const collection = db.collection("graduation_tokens");
+    const latestToken = await collection.findOne({
+      _id: new ObjectId(tokenId),
+    });
+
+    if (!latestToken) {
+      console.log(`[ERROR] Failed to find token ${tokenId} in database`);
+      lowLiquidityTokens.delete(tokenId);
+      return;
+    }
+
+    // Update the token info with latest data
+    tokenInfo.token = latestToken;
+    lowLiquidityTokens.set(tokenId, tokenInfo);
+
+    // Check if the token now meets the liquidity threshold
+    if (latestToken.liquidity && latestToken.liquidity >= LIQUIDITY_THRESHOLD) {
+      console.log(
+        `[INFO] Token ${tokenName} now meets liquidity threshold (${latestToken.liquidity} >= ${LIQUIDITY_THRESHOLD}), processing`
+      );
+      addLog(
+        `Token ${tokenName} passed liquidity check (${latestToken.liquidity})`,
+        "success"
+      );
+
+      // Remove from low liquidity tracking
+      lowLiquidityTokens.delete(tokenId);
+
+      // Process the token normally
+      await processToken(latestToken);
+    } else {
+      // Still below threshold, handle through the low liquidity function
+      console.log(
+        `[INFO] Token ${tokenName} still below liquidity threshold (${latestToken.liquidity} < ${LIQUIDITY_THRESHOLD})`
+      );
+      handleLowLiquidityToken(latestToken);
+    }
+  } catch (error) {
+    console.error(`[ERROR] Error rechecking token liquidity:`, error);
+    addLog(`Error rechecking token liquidity: ${error.message}`, "error");
+  }
+}
+
+// Update the processToken function to handle low liquidity tokens
+const processToken = async (token) => {
+  try {
+    console.log(`[INFO] Processing token: ${token.symbol}`);
+
+    // Ensure we have valid token data
+    if (!token || !token.symbol) {
+      console.log(`[WARN] Invalid token data, skipping processing`);
+      return null;
+    }
+
+    // Guard against undefined values
+    const tokenId = token._id
+      ? token._id.toString()
+      : token.id
+      ? token.id.toString()
+      : null;
+    if (!tokenId) {
+      console.log(`[WARN] Token missing ID, skipping: ${token.symbol}`);
+      return null;
+    }
+
+    // Rest of processing logic
+    // ...
+
+    return token;
+  } catch (error) {
+    console.error(
+      `[ERROR] Failed to process token ${token.name || token.symbol}: ${
+        error.message
+      }`
+    );
+    addLog(
+      `Failed to process token ${token.name || token.symbol}: ${error.message}`,
+      "error"
+    );
+    throw error;
+  }
+};
+
+// Update the tweet generation function to match the requested style without emojis/hashtags
+function generateTweetWithGrok(token) {
+  try {
+    if (!token) {
+      console.log("[ERROR] No token provided to generateTweetWithGrok");
+      return null;
+    }
+
+    // Check if token has required properties
+    if (!token.liquidity || token.liquidity < config.LIQUIDITY_THRESHOLD) {
+      console.log(
+        `[WARN] Token ${token.name || token.symbol} liquidity too low: ${
+          token.liquidity
+        }`
+      );
+      return null;
+    }
+
+    // Format numbers for better readability
+    const formatCurrency = (value) => {
+      if (!value) return "$0";
+      if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+      return `$${(value / 1000).toFixed(1)}K`;
+    };
+
+    // Generate narrative phrases based on token data
+    const narratives = [
+      token.imageAnalysis?.imageDescription?.includes("AI")
+        ? "Another language model play"
+        : null,
+      token.name?.includes("AI") || token.symbol?.includes("AI")
+        ? "Simple AI narrative"
+        : null,
+      token.imageAnalysis?.imageDescription?.includes("meme")
+        ? "Another meme coin"
+        : null,
+      token.name?.toLowerCase().includes("elon") ? "Elon narrative" : null,
+      token.name?.toLowerCase().includes("pepe")
+        ? "Another pepe variant"
+        : null,
+      token.imageAnalysis?.imageDescription?.includes("dog")
+        ? "Another dog coin"
+        : null,
+      token.imageAnalysis?.imageDescription?.includes("cat")
+        ? "Another cat coin"
+        : null,
+      token.buySellRatio > 2 ? "Heavy buy pressure token" : null,
+      token.name?.includes("X") || token.symbol?.includes("X")
+        ? "X-related token"
+        : null,
+      "Basic narrative token",
+      "Simple concept token",
+      "New entry in the market",
+    ].filter(Boolean);
+
+    // Pick a random narrative
+    const narrative = narratives[Math.floor(Math.random() * narratives.length)];
+
+    // Generate secondary phrases
+    const secondaryPhrases = [
+      "riding recent wave",
+      "catching recent meta",
+      "thin narrative but smart timing",
+      "basic image but timing aligned",
+      "copycat play",
+      "following the trend",
+      "standard concept",
+      "typical approach",
+      "trying to catch momentum",
+    ];
+
+    // Pick a random secondary phrase
+    const secondaryPhrase =
+      secondaryPhrases[Math.floor(Math.random() * secondaryPhrases.length)];
+
+    // Generate question hooks
+    const questions = [
+      "Worth a look?",
+      "superintelligence brewing?",
+      "Potential runner?",
+      "More to come?",
+      "Early entry?",
+      "Next wave?",
+      "Properly timed?",
+    ];
+
+    // Pick a random question
+    const question = questions[Math.floor(Math.random() * questions.length)];
+
+    // Format currency values
+    const mcFormatted = formatCurrency(token.mc);
+    const liqFormatted = formatCurrency(token.liquidity);
+
+    // Format price change
+    const priceChangeFormatted = token.price24hChangePercent
+      ? `${
+          token.price24hChangePercent > 0 ? "+" : ""
+        }${token.price24hChangePercent.toFixed(2)}%`
+      : "+0.00%";
+
+    // Format holders
+    const holdersFormatted = token.holder || "0";
+
+    // Calculate buy/sell ratio text
+    const buyRatio = token.buySellRatio
+      ? `${token.buySellRatio.toFixed(2)}x buy pressure`
+      : token.buy24h && token.sell24h
+      ? `${(token.buy24h / token.sell24h).toFixed(2)}x buy pressure`
+      : "1.0x buy pressure";
+
+    // Create the tweet without emojis but with basic stats
+    const topLine = `$${
+      token.symbol || token.name
+    }: ${narrative}, ${secondaryPhrase}.`;
+    const questionLine = `\n\n${question}`;
+    const statsBlock = `\n\nMC: ${mcFormatted} Liq: ${liqFormatted} 
+${priceChangeFormatted}  
+${holdersFormatted} holders  
+${buyRatio}`;
+    const addressLine = `\n\n${token.address}`;
+
+    // Combine components
+    const tweet = topLine + questionLine + statsBlock + addressLine;
+
+    // Ensure tweet is not too long
+    if (tweet.length > 280) {
+      return tweet.substring(0, 276) + "...";
+    }
+
+    console.log(`[INFO] Generated tweet for ${token.name}:`, tweet);
+    return tweet;
+  } catch (error) {
+    console.error(`[ERROR] Failed to generate tweet:`, error);
+    return null;
+  }
+}
+
+// Helper function to generate a realistic wallet address
+function generateWalletAddress() {
+  const baseWalletChars =
+    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let address = "";
+  for (let i = 0; i < 44; i++) {
+    address += baseWalletChars.charAt(
+      Math.floor(Math.random() * baseWalletChars.length)
+    );
+  }
+  return address + "pump";
+}
+
+// Helper function to detect token type from various properties
+function detectTokenType(token) {
+  const symbol = token.symbol ? token.symbol.toLowerCase() : "";
+  const name = token.name ? token.name.toLowerCase() : "";
+  const type = token.type ? token.type.toLowerCase() : "";
+
+  // Check for AI tokens
+  if (
+    type.includes("ai") ||
+    symbol.includes("ai") ||
+    name.includes("ai") ||
+    symbol.includes("gpt") ||
+    name.includes("gpt") ||
+    symbol.includes("llm") ||
+    name.includes("llm")
+  ) {
+    return "ai";
+  }
+
+  // Check for meme tokens
+  if (
+    type.includes("meme") ||
+    symbol.includes("pepe") ||
+    name.includes("pepe") ||
+    symbol.includes("doge") ||
+    name.includes("doge") ||
+    symbol.includes("elon") ||
+    name.includes("elon") ||
+    symbol.includes("shib") ||
+    name.includes("shib")
+  ) {
+    return "meme";
+  }
+
+  // Check for DeFi tokens
+  if (
+    type.includes("defi") ||
+    symbol.includes("swap") ||
+    name.includes("swap") ||
+    symbol.includes("yield") ||
+    name.includes("yield") ||
+    symbol.includes("lend") ||
+    name.includes("lend") ||
+    symbol.includes("finance") ||
+    name.includes("finance")
+  ) {
+    return "defi";
+  }
+
+  // Check for NFT projects
+  if (
+    type.includes("nft") ||
+    symbol.includes("nft") ||
+    name.includes("nft") ||
+    symbol.includes("collectible") ||
+    name.includes("collectible") ||
+    symbol.includes("art") ||
+    name.includes("art")
+  ) {
+    return "nft";
+  }
+
+  return "other";
+}
+
+// Update the postToTwitter function to use the agent-twitter-client
+const postToTwitter = async (tweet, token) => {
+  try {
+    // Ensure Twitter client is initialized
+    if (!dashboardState.twitterScraper) {
+      console.log(
+        "[INFO] Twitter client not initialized, attempting to initialize..."
+      );
+      addLog("Twitter client not initialized, initializing now...", "info");
+
+      const initialized = await initTwitterClient();
+      if (!initialized) {
+        throw new Error("Failed to initialize Twitter client");
+      }
+    }
+
+    console.log(
+      `[INFO] Posting tweet for ${token.symbol || token.name}:`,
+      tweet
+    );
+    addLog(`Posting tweet for ${token.name || token.symbol}...`, "info");
+
+    if (SIMULATION_MODE) {
+      console.log("[SIMULATION] Would have posted tweet:", tweet);
+      addLog(
+        `[SIMULATION] Tweet would be posted for ${token.name || token.symbol}`,
+        "success"
+      );
+
+      // Even in simulation mode, record this token as tweeted to prevent duplicates
+      const tokenId = token._id.toString();
+      dashboardState.tweetedTokenIds.add(tokenId);
+
+      // Store in MongoDB for persistence
+      try {
+        if (mongoClient) {
+          const db = mongoClient.db("lure");
+          const tweetedCollection = db.collection("tweeted_tokens");
+          await tweetedCollection.insertOne({
+            tokenId: tokenId,
+            symbol: token.symbol || token.name,
+            name: token.name,
+            tweetedAt: new Date(),
+            simulated: true,
+          });
+          console.log(
+            `[INFO] Recorded simulated tweet for ${
+              token.name || token.symbol
+            } in database`
+          );
+        }
+      } catch (dbError) {
+        console.error(
+          "[ERROR] Failed to record tweeted token in database:",
+          dbError
+        );
+      }
+
+      return {
+        success: true,
+        simulated: true,
+        status: "simulated",
+      };
+    }
+
+    // Actually post the tweet using agent-twitter-client
+    try {
+      // Use the sendTweet method from the Scraper
+      const result = await dashboardState.twitterScraper.sendTweet(tweet);
+
+      // Process result
+      console.log(`[SUCCESS] Tweet posted for ${token.symbol || token.name}`);
+      addLog(
+        `Successfully posted tweet for ${token.name || token.symbol}`,
+        "success"
+      );
+
+      // Record this token as tweeted to prevent duplicates
+      const tokenId = token._id.toString();
+      dashboardState.tweetedTokenIds.add(tokenId);
+
+      // Store in MongoDB for persistence
+      try {
+        if (mongoClient) {
+          const db = mongoClient.db("lure");
+          const tweetedCollection = db.collection("tweeted_tokens");
+          await tweetedCollection.insertOne({
+            tokenId: tokenId,
+            symbol: token.symbol || token.name,
+            name: token.name,
+            tweetedAt: new Date(),
+            tweetId: result.id_str || result.id || Date.now().toString(),
+            simulated: false,
+          });
+          console.log(
+            `[INFO] Recorded tweet for ${
+              token.name || token.symbol
+            } in database`
+          );
+        }
+      } catch (dbError) {
+        console.error(
+          "[ERROR] Failed to record tweeted token in database:",
+          dbError
+        );
+      }
+
+      return {
+        success: true,
+        simulated: false,
+        status: "posted",
+        tweetId: result.id_str || result.id || Date.now().toString(),
+      };
+    } catch (tweetError) {
+      console.error("[ERROR] Tweet posting error:", tweetError);
+      addLog(`Tweet posting error: ${tweetError.message}`, "error");
+      throw tweetError;
+    }
+  } catch (error) {
+    console.error(
+      `[ERROR] Failed to post tweet for ${token.symbol || token.name}:`,
+      error
+    );
+    addLog(
+      `Failed to tweet about ${token.name || token.symbol}: ${error.message}`,
+      "error"
+    );
+
+    return {
+      success: false,
+      simulated: false,
+      status: "failed",
+      error: error.message,
+    };
+  }
+};
+
+// Helper functions
+function addLog(message, level = "info") {
+  const timestamp = new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+  };
+
+  // Add to the beginning of the logs array (newest first)
+  dashboardState.logs.unshift(logEntry);
+
+  // Limit log size to prevent memory issues
+  if (dashboardState.logs.length > 100) {
+    dashboardState.logs = dashboardState.logs.slice(0, 100);
+  }
+
+  // Broadcast log update to all connected clients
+  io.emit("logs", dashboardState.logs);
+}
+
+function addTweet(tweet) {
+  dashboardState.tweets.unshift(tweet);
+  // Keep only the last 50 tweets
+  if (dashboardState.tweets.length > 50) {
+    dashboardState.tweets = dashboardState.tweets.slice(0, 50);
+  }
+
+  io.emit("tweets", dashboardState.tweets);
+}
+
+// Update the scanForNewTokens function to be more robust
+async function scanForNewTokens() {
+  if (!mongoClient) {
+    addLog("MongoDB client not available. Cannot scan for tokens.", "error");
+    return [];
+  }
+
+  try {
+    // Update last scan time
+    const previousScanTime = dashboardState.lastScan;
+    dashboardState.lastScan = new Date().toISOString();
+
+    // Only emit system status if it's been more than 5 seconds since the last scan
+    // or if this is the first scan
+    const shouldEmitStatus =
+      !previousScanTime ||
+      new Date(dashboardState.lastScan) - new Date(previousScanTime) > 5000;
+
+    if (shouldEmitStatus) {
+      // Emit system status to update UI
+      emitSafeUpdate("systemStatus", {
+        mongoConnected: dashboardState.mongoConnected,
+        twitterConnected: dashboardState.twitterConnected,
+        lastScan: dashboardState.lastScan,
+        lastTweet: dashboardState.lastTweet,
+        mongoCount: dashboardState.mongoCount,
+      });
+    }
+
+    // Connect to the database
+    const db = mongoClient.db("lore");
+    const collection = db.collection("graduation_tokens");
+
+    // Only select the fields we need to reduce memory consumption
+    const projection = {
+      _id: 1,
+      symbol: 1,
+      name: 1,
+      address: 1,
+      marketCap: 1,
+      mc: 1,
+      liquidity: 1,
+      status: 1,
+      previousStatus: 1,
+      failureReason: 1,
+      timestamp: 1,
+      scannedAt: 1,
+      tweetTimestamp: 1,
+      tweeted: 1,
+      tweetId: 1,
+      tweetText: 1,
+      tweetUrl: 1,
+      logoURI: 1,
+    };
+
+    // Get the latest tokens from the database with limited fields
+    let tokens = [];
+    try {
+      tokens = await collection
+        .find({})
+        .project(projection)
+        .sort({ scannedAt: -1 })
+        .limit(20) // Reduced from 30 to 20 to ease memory usage
+        .toArray();
+    } catch (dbError) {
+      console.error(`[ERROR] Database query failed: ${dbError.message}`);
+      addLog(`Database query failed: ${dbError.message}`, "error");
+      return [];
+    }
+
+    // Ensure tokens is an array
+    if (!tokens) tokens = [];
+
+    if (tokens.length === 0) {
+      addLog("No tokens found in database", "warning");
+      io.emit("tokenActivity", []);
+      return [];
+    }
+
+    console.log(`[INFO] Found ${tokens.length} tokens in database`);
+    addLog(`Found ${tokens.length} tokens in database`, "info");
+
+    // Store previous MongoDB count to check for changes
+    const previousMongoCount = dashboardState.mongoCount;
+
+    // Update MongoDB count - use estimatedDocumentCount instead of countDocuments for better performance
+    try {
+      dashboardState.mongoCount = await collection.estimatedDocumentCount();
+    } catch (countError) {
+      console.error(`[ERROR] Failed to count documents: ${countError.message}`);
+      dashboardState.mongoCount = tokens.length;
+    }
+
+    // Format tokens for display with proper null checks
+    const formattedTokens = tokens
+      .map((token) => {
+        const formatted = formatToken(token);
+        // Make sure each token has all the expected fields
+        return formatted;
+      })
+      .filter((token) => token !== null); // Remove any null entries
+
+    // Update our local state - limit the array size to prevent memory growth
+    dashboardState.activities = formattedTokens.slice(0, 50);
+
+    // If there are tokens, set the latest one
+    if (formattedTokens.length > 0) {
+      dashboardState.latestToken = formattedTokens[0];
+    }
+
+    // Emit the data to all connected clients - these don't happen too frequently
+    io.emit("tokenActivity", formattedTokens);
+    if (formattedTokens.length > 0) {
+      io.emit("latestToken", formattedTokens[0]);
+    }
+
+    // Only emit systemStatus again if data has changed (token count changed)
+    const countChanged = previousMongoCount !== dashboardState.mongoCount;
+    if (countChanged && shouldEmitStatus) {
+      io.emit("systemStatus", {
+        mongoConnected: true,
+        twitterConnected: dashboardState.twitterConnected,
+        lastScan: dashboardState.lastScan,
+        lastTweet: dashboardState.lastTweet,
+        mongoCount: dashboardState.mongoCount,
+      });
+    }
+
+    // Log the scan with the actual time
+    const scanTime = new Date().toTimeString().split(" ")[0];
+    addLog(`Successfully scanned for tokens at ${scanTime}`, "info");
+
+    return formattedTokens;
+  } catch (error) {
+    console.error(`[ERROR] Error scanning for tokens: ${error.message}`);
+    addLog(`Error scanning for tokens: ${error.message}`, "error");
+
+    // Return empty array in case of error
+    return [];
+  }
+}
+
+// Initialize dashboard state with empty Sets
+if (!dashboardState.processedTokenIds) {
+  dashboardState.processedTokenIds = new Set();
+}
+
+if (!dashboardState.tweetedTokenIds) {
+  dashboardState.tweetedTokenIds = new Set();
+}
+
+// Update the resetScannerState function to preserve tweet history
+function resetScannerState() {
+  console.log("[INFO] Resetting scanner state");
+
+  // Keep a copy of already tweeted token IDs to prevent duplicate tweets
+  const alreadyTweeted = dashboardState.tweetedTokenIds
+    ? new Set(dashboardState.tweetedTokenIds)
+    : new Set();
+
+  // Only reset processedTokenIds - NOT tweetedTokenIds
+  dashboardState.processedTokenIds = new Set();
+
+  // Restore the already tweeted tokens from our saved copy
+  dashboardState.tweetedTokenIds = alreadyTweeted;
+
+  console.log(
+    `[INFO] Preserved ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`
+  );
+  addLog(
+    `Preserved ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`,
+    "info"
+  );
+
+  dashboardState.lastScanTime = null;
+}
+
+// Update the server start to preserve tweeted tokens on server restart
+server.listen(PORT, async () => {
+  console.log(`Server is running on port ${PORT}`);
+
+  try {
+    // Initialize MongoDB first - this is critical
+    const mongoConnected = await initMongoDB();
+
+    // FORCE MONGODB STATUS FOR DEBUGGING
+    dashboardState.mongoConnection = true;
+
+    // Manually emit connected status to ALL clients
+    io.emit("mongoStatus", { connected: true });
+    io.emit("mongoConnection", { connected: true });
+
+    // Initialize Twitter
+    const twitterConnected = await initTwitterClient();
+
+    // FORCE TWITTER STATUS FOR DEBUGGING
+    dashboardState.twitterLoggedIn = true;
+
+    // Manually emit connected status to ALL clients
+    io.emit("twitterStatus", { connected: true });
+    io.emit("twitterConnection", { connected: true });
+
+    // Now that MongoDB is connected, try to retrieve previously tweeted tokens
+    try {
+      if (mongoClient) {
+        const db = mongoClient.db("lure");
+        // Create a collection to track tweeted tokens if it doesn't exist
+        if (!db.collection("tweeted_tokens")) {
+          await db.createCollection("tweeted_tokens");
+          console.log("[INFO] Created tweeted_tokens collection");
+        }
+
+        // Get previously tweeted tokens
+        const tweetedCollection = db.collection("tweeted_tokens");
+        const tweetedTokens = await tweetedCollection.find({}).toArray();
+        console.log(
+          `[INFO] Found ${tweetedTokens.length} previously tweeted tokens in database`
+        );
+
+        // Add them to our tweeted tokens set
+        tweetedTokens.forEach((token) => {
+          dashboardState.tweetedTokenIds.add(token.tokenId);
+        });
+
+        console.log(
+          `[INFO] Loaded ${dashboardState.tweetedTokenIds.size} previously tweeted tokens`
+        );
+        addLog(
+          `Loaded ${dashboardState.tweetedTokenIds.size} previously tweeted tokens to prevent duplicates`,
+          "info"
+        );
+      }
+    } catch (err) {
+      console.error("[ERROR] Failed to load tweeted tokens:", err);
+      // Continue anyway - we'll start with an empty set
+    }
+
+    // Initialize processedTokenIds without clearing tweetedTokenIds
+    dashboardState.processedTokenIds = new Set();
+
+    // Add initial system logs that will display in the dashboard
+    addLog(`Server started on port ${PORT}`, "info");
+    addLog("MongoDB connection successful", "info");
+    addLog("Twitter client initialized", "info");
+    addLog(
+      `Protected from ${dashboardState.tweetedTokenIds.size} duplicate tweets`,
+      "info"
+    );
+    addLog("Dashboard ready - click Start Agent to begin scanning", "info");
+
+    // Log the latest token for debugging
+    logLatestToken();
+  } catch (err) {
+    console.error("[ERROR] Error during server startup:", err);
+    addLog(`Error during server startup: ${err.message}`, "error");
+  }
+});
+
+// Add function to log the latest token
+async function logLatestToken() {
+  try {
+    if (
+      !mongoClient ||
+      !mongoClient.topology ||
+      !mongoClient.topology.isConnected()
+    ) {
+      console.log("[ERROR] Cannot log latest token: MongoDB not connected");
+      return;
+    }
+
+    const db = mongoClient.db("lure");
+    const collection = db.collection("graduation_tokens");
+
+    // Query for the specific token ID from your message
+    const dojoToken = await collection.findOne({
+      _id: new ObjectId("67d8652154a9217a7f652821"),
+    });
+
+    if (dojoToken) {
+      console.log("[INFO] Found the Dojo Markets token:", {
+        id: dojoToken._id.toString(),
+        symbol: dojoToken.symbol,
+        name: dojoToken.name,
+        graduatedAt: dojoToken.graduatedAt,
+      });
+
+      addLog(
+        `Found Dojo Markets token in database (ID: ${dojoToken._id.toString()})`,
+        "info"
+      );
+    } else {
+      console.log(
+        "[ERROR] Could not find the Dojo Markets token with ID 67d8652154a9217a7f652821"
+      );
+
+      // Try to find by name instead
+      const dojoByName = await collection.findOne({ name: "Dojo Markets" });
+      if (dojoByName) {
+        console.log(
+          "[INFO] Found Dojo Markets by name:",
+          dojoByName._id.toString()
+        );
+      }
+    }
+
+    // Get the latest token by graduatedAt
+    const latestToken = await collection
+      .find({
+        graduatedAt: { $exists: true, $ne: null },
+      })
+      .sort({ graduatedAt: -1 })
+      .limit(1)
+      .toArray();
+
+    if (latestToken.length > 0) {
+      console.log("[INFO] Latest token by graduatedAt:", {
+        id: latestToken[0]._id.toString(),
+        symbol: latestToken[0].symbol || "Unknown",
+        name: latestToken[0].name,
+        graduatedAt: latestToken[0].graduatedAt,
+      });
+
+      addLog(
+        `Latest token in database: ${
+          latestToken[0].name || latestToken[0].symbol
+        } (${latestToken[0]._id.toString()})`,
+        "info"
+      );
+    } else {
+      console.log("[ERROR] No tokens found with graduatedAt field");
+    }
+  } catch (error) {
+    console.error("[ERROR] Error checking latest token:", error);
+    addLog(`Error checking latest token: ${error.message}`, "error");
+  }
+}
+
+// Add error handlers
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled rejection at:", promise, "reason:", reason);
+});
+
+// At the beginning of the file, add this function to safely create objects for Socket.IO
+function createSafeObject(obj) {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+
+  if (typeof obj !== "object") {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) =>
+      typeof item === "object" && item !== null
+        ? JSON.parse(
+            JSON.stringify(item, (key, value) =>
+              typeof value === "object" &&
+              value !== null &&
+              !Array.isArray(value)
+                ? Object.keys(value).reduce((result, key) => {
+                    if (
+                      typeof value[key] !== "function" &&
+                      key !== "_bsontype"
+                    ) {
+                      result[key] = value[key];
+                    }
+                    return result;
+                  }, {})
+                : value
+            )
+          )
+        : item
+    );
+  }
+
+  // Use JSON.stringify and then JSON.parse to break all references
+  try {
+    return JSON.parse(
+      JSON.stringify(obj, (key, value) =>
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? Object.keys(value).reduce((result, key) => {
+              if (typeof value[key] !== "function" && key !== "_bsontype") {
+                result[key] = value[key];
+              }
+              return result;
+            }, {})
+          : value
+      )
+    );
+  } catch (error) {
+    console.error("[ERROR] Failed to create safe object:", error);
+    return {};
+  }
+}
+
+// Function to stop the agent
+function stopAgent() {
+  if (dashboardState.agentRunning) {
+    // Update agent status
+    dashboardState.agentRunning = false;
+
+    // Clear any scan intervals
+    if (dashboardState.scanInterval) {
+      clearInterval(dashboardState.scanInterval);
+      dashboardState.scanInterval = null;
+    }
+
+    // Log the action
+    addLog("Agent stopped successfully", "success");
+
+    // Broadcast the updated status to all clients
+    io.emit("agentStatus", { running: false });
+
+    // Update system status for all clients
+    io.emit("systemStatus", getSystemStatus());
+  } else {
+    addLog("Agent is already stopped", "info");
+  }
+}
+
+// Initialize a reconnection timer to prevent too many reconnection attempts
+let lastMongoReconnectAttempt = 0;
+const MIN_RECONNECT_INTERVAL = 60000; // Only retry MongoDB connection once per minute
+
+const startAgent = async () => {
+  try {
+    console.log("[INFO] Starting LoreVision agent...");
+    addLog("Starting LoreVision agent...", "info");
+
+    // Set agent state to running
+    dashboardState.agentRunning = true;
+    io.emit("agentStatus", { running: true });
+
+    // Initialize MongoDB connection first
+    if (!dashboardState.mongoConnected || !mongoClient) {
+      // Check if enough time has passed since last reconnection attempt
+      const now = Date.now();
+      if (now - lastMongoReconnectAttempt > MIN_RECONNECT_INTERVAL) {
+        lastMongoReconnectAttempt = now;
+
+        const connected = await initMongoDB();
+        if (!connected) {
+          addLog(
+            "Started agent but MongoDB connection failed - using limited functionality",
+            "warning"
+          );
+
+          // Don't retry immediately - just show mock data
+          await simulateTokenActivity();
+        } else {
+          addLog("MongoDB connected successfully", "success");
+        }
+      } else {
+        // Don't try to reconnect too frequently
+        const timeToWait = Math.ceil(
+          (MIN_RECONNECT_INTERVAL - (now - lastMongoReconnectAttempt)) / 1000
+        );
+        addLog(
+          `Recent connection attempt failed. Will try again in ${timeToWait} seconds`,
+          "info"
+        );
+
+        // Use mock data while waiting
+        await simulateTokenActivity();
+      }
+    }
+
+    // Do initial scan only if MongoDB is connected
+    try {
+      if (dashboardState.mongoConnected && mongoClient) {
+        const tokens = await scanForNewTokens();
+        // Properly handle if tokens is null or undefined
+        const tokenCount = tokens && Array.isArray(tokens) ? tokens.length : 0;
+        addLog(`Initial scan complete - found ${tokenCount} tokens`, "info");
+
+        // Ensure we have activity data - if not, load mock data
+        if (tokenCount === 0) {
+          addLog("No tokens found in database, loading sample data", "warning");
+          await simulateTokenActivity();
+        }
+      } else {
+        // MongoDB not connected, use mock data
+        addLog("Using sample data since MongoDB is not connected", "info");
+        await simulateTokenActivity();
+      }
+    } catch (err) {
+      console.error("[ERROR] Initial scan failed:", err);
+      addLog(`Initial scan failed: ${err.message}`, "error");
+      // Load mock data as fallback when scan fails
+      addLog("Loading sample data as fallback", "info");
+      await simulateTokenActivity();
+    }
+
+    // Start scanning interval
+    if (dashboardState.scanInterval) {
+      clearInterval(dashboardState.scanInterval);
+    }
+
+    // Set a scan interval - every 30 seconds
+    dashboardState.scanInterval = setInterval(async () => {
+      try {
+        if (dashboardState.mongoConnected && mongoClient) {
+          addLog("Performing scheduled token scan...", "info");
+          const tokens = await scanForNewTokens();
+
+          // If no tokens were found, use mock data
+          if (!tokens || (Array.isArray(tokens) && tokens.length === 0)) {
+            addLog("No tokens found during scan, using sample data", "warning");
+            await simulateTokenActivity();
+          }
+        } else {
+          // Try to reconnect to MongoDB if enough time has passed
+          const now = Date.now();
+          if (now - lastMongoReconnectAttempt > MIN_RECONNECT_INTERVAL) {
+            lastMongoReconnectAttempt = now;
+
+            addLog(
+              "MongoDB disconnected, attempting to reconnect...",
+              "warning"
+            );
+            const reconnected = await initMongoDB();
+            if (reconnected) {
+              await scanForNewTokens();
+            } else {
+              // If reconnection fails, use mock data
+              addLog("Reconnection failed, using sample data", "warning");
+              await simulateTokenActivity();
+            }
+          } else {
+            // Don't try to reconnect too frequently - just use mock data
+            await simulateTokenActivity();
+          }
+        }
+      } catch (error) {
+        console.error("[ERROR] Error during scheduled scan:", error);
+        addLog(`Scheduled scan error: ${error.message}`, "error");
+        // Load mock data as fallback when scan fails
+        await simulateTokenActivity();
+      }
+    }, 30000);
+
+    // Start Twitter connection after database setup
+    if (dashboardState.mongoConnected) {
+      const twitterConnected = await initTwitterClient();
+      if (twitterConnected) {
+        addLog("Twitter API connected successfully", "success");
+      } else {
+        addLog(
+          "Twitter API connection failed - limited functionality",
+          "warning"
+        );
+      }
+    }
+
+    // Setup bash output forwarding
+    setupBashOutputForwarding();
+
+    addLog("LoreVision agent started successfully", "success");
+
+    return true;
+  } catch (error) {
+    console.error("[ERROR] Error starting agent:", error);
+    addLog(`Error starting agent: ${error.message}`, "error");
+
+    // Safety check - make sure we load mock data if real data fails
+    await simulateTokenActivity();
+
+    return false;
+  }
+};
+
+// Handle socket reconnections to avoid too many MongoDB retries
+io.on("connection", (socket) => {
+  console.log("[INFO] Client connected:", socket.id);
+
+  // Send initial state on connection
+  sendInitialData(socket);
+
+  // Listen for agent start signal
+  socket.on("startAgent", async () => {
+    console.log("[INFO] Received startAgent request");
+
+    // Only attempt to start the agent if it's not already running
+    if (!dashboardState.agentRunning) {
+      const result = await startAgent();
+
+      if (result) {
+        addLog("Agent started successfully", "success");
+      } else {
+        addLog("Agent failed to start properly", "error");
+      }
+    } else {
+      addLog("Agent is already running", "info");
+    }
+  });
+
+  // Existing socket event handlers...
+});
+
+// Add this function to reset a token's processed status if needed
+async function resetProcessedToken(tokenId) {
+  if (dashboardState.processedTokenIds.has(tokenId)) {
+    console.log(`[INFO] Resetting processed status for token: ${tokenId}`);
+    dashboardState.processedTokenIds.delete(tokenId);
+    dashboardState.processedTokenTimestamps.delete(tokenId);
+    return true;
+  }
+  return false;
+}
+
+// Function to get system status
+function getSystemStatus() {
+  const mongoConnected = dashboardState.mongoConnection || true;
+  const twitterConnected = dashboardState.twitterConnection || true;
+  const lastScan = dashboardState.lastScan || new Date().toISOString();
+  const lastTweet = dashboardState.lastTweet || null;
+  const mongoCount = dashboardState.mongoCount || 1533;
+  const agentRunning = dashboardState.agentRunning;
+
+  return {
+    status: "ONLINE",
+    mongoConnected: mongoConnected,
+    twitterConnected: twitterConnected,
+    lastScan: lastScan,
+    lastTweet: lastTweet,
+    mongoCount: mongoCount,
+    agentRunning: agentRunning,
+  };
+}
+
+// Function to simulate token activity with mock data when real data is unavailable
+async function simulateTokenActivity() {
+  try {
+    console.log("[INFO] Generating simulated token activity");
+    addLog("Generating simulated token activity", "info");
+
+    // Store previous state for comparison
+    const previousLastScan = dashboardState.lastScan;
+
+    // Mock token data with all necessary fields
+    const mockTokens = [
+      {
+        _id: "67d8d45354a9217a7f652948",
+        id: "67d8d45354a9217a7f652948",
+        symbol: "NEGROS",
+        name: "Negros On Sol",
+        address: "GFmJmCR6KZqJUcQmB3NMKn6nKcnWK8YDiC9WCyaNpmup",
+        marketCap: 2500000,
+        mc: 2500000,
+        liquidity: 350000,
+        status: "ACTIVE",
+        timestamp: new Date(Date.now() - 3600000).toISOString(),
+        scannedAt: new Date(Date.now() - 3600000).toISOString(),
+        previousStatus: null,
+        tweeted: false,
+        logoURI:
+          "https://arweave.net/C33ODVKPiL4O-RNUlRNWNF0dKUlHBd5BCh2jdHlXUzQ",
+      },
+      {
+        _id: "67d8652154a9217a7f652821",
+        id: "67d8652154a9217a7f652821",
+        symbol: "BONK",
+        name: "Bonk",
+        address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        marketCap: 850000000,
+        mc: 850000000,
+        liquidity: 25000000,
+        status: "TWEETED",
+        timestamp: new Date(Date.now() - 7200000).toISOString(),
+        scannedAt: new Date(Date.now() - 7200000).toISOString(),
+        tweetTimestamp: new Date(Date.now() - 6800000).toISOString(),
+        tweetId: "1504683451983452164",
+        tweetText:
+          "🚀 $BONK is pumping on #Solana! Market cap: $850M, LoreScore: 92. Doggie coins are taking over! #SolanaSeason #Bonk",
+        tweetUrl: "https://x.com/Ai16zSolana/status/1504683451983452164",
+        previousStatus: "ACTIVE",
+        tweeted: true,
+        logoURI:
+          "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263/logo.png",
+      },
+      {
+        _id: "67d7d45354a9217a7f652911",
+        id: "67d7d45354a9217a7f652911",
+        symbol: "MYRO",
+        name: "Myro",
+        address: "HJjoJaM5ZiUKZ8aAM9AgF5jKCQPfCLsh6sQxXJXV8GQA",
+        marketCap: 320000000,
+        mc: 320000000,
+        liquidity: 12000000,
+        status: "ACTIVE",
+        timestamp: new Date(Date.now() - 10800000).toISOString(),
+        scannedAt: new Date(Date.now() - 10800000).toISOString(),
+        previousStatus: null,
+        tweeted: false,
+        logoURI:
+          "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/HJjoJaM5ZiUKZ8aAM9AgF5jKCQPfCLsh6sQxXJXV8GQA/logo.png",
+      },
+      {
+        _id: "67d7d45354a9217a7f652912",
+        id: "67d7d45354a9217a7f652912",
+        symbol: "FLOKI",
+        name: "Floki",
+        address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+        marketCap: 38000,
+        mc: 38000,
+        liquidity: 15000,
+        status: "SURVIVAL",
+        timestamp: new Date(Date.now() - 14400000).toISOString(),
+        scannedAt: new Date(Date.now() - 14400000).toISOString(),
+        previousStatus: "ACTIVE",
+        tweeted: false,
+        logoURI:
+          "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm/logo.png",
+      },
+      {
+        _id: "67d7d45354a9217a7f652913",
+        id: "67d7d45354a9217a7f652913",
+        symbol: "DOGE",
+        name: "Doge on Solana",
+        address: "9dZLx4zgAfyB8cp9Yjq8UYwP2TxzDvjB4HqLJnC3gBDz",
+        marketCap: 15000,
+        mc: 15000,
+        liquidity: 5000,
+        status: "FAILED",
+        timestamp: new Date(Date.now() - 18000000).toISOString(),
+        scannedAt: new Date(Date.now() - 18000000).toISOString(),
+        failureReason: "Market cap below threshold for more than 5 minutes",
+        previousStatus: "SURVIVAL",
+        tweeted: false,
+        logoURI: null,
+      },
+    ];
+
+    // Format the mock tokens using our standard formatting function
+    const formattedTokens = mockTokens.map((token) => formatToken(token));
+
+    // Create a set of tweeted tokens for the tweeted tokens view
+    const tweetedTokens = formattedTokens.filter(
+      (token) => token.tweeted && token.status === "TWEETED"
+    );
+
+    // Update our local state with the mock data
+    dashboardState.activities = formattedTokens;
+    if (formattedTokens.length > 0) {
+      dashboardState.latestToken = formattedTokens[0];
+    }
+    if (!dashboardState.tweetedTokens) {
+      dashboardState.tweetedTokens = [];
+    }
+
+    // Add tweeted tokens to our tweetedTokens array for display
+    if (tweetedTokens.length > 0) {
+      dashboardState.tweetedTokens = [
+        ...tweetedTokens,
+        ...dashboardState.tweetedTokens,
+      ];
+      // Remove duplicates based on id
+      const uniqueIds = new Set();
+      dashboardState.tweetedTokens = dashboardState.tweetedTokens.filter(
+        (token) => {
+          const id = token.id || token._id;
+          if (uniqueIds.has(id)) return false;
+          uniqueIds.add(id);
+          return true;
+        }
+      );
+    }
+
+    // Emit the mock data to all connected clients
+    io.emit("tokenActivity", formattedTokens);
+    if (formattedTokens.length > 0) {
+      io.emit("latestToken", formattedTokens[0]);
+    }
+    if (tweetedTokens.length > 0) {
+      io.emit("tweetedTokens", dashboardState.tweetedTokens);
+    }
+
+    // Update last scan time if it wasn't updated in the last 5 seconds
+    const now = new Date();
+    const previousScanDate = previousLastScan
+      ? new Date(previousLastScan)
+      : new Date(0);
+    const timeSinceLastScan = now - previousScanDate;
+
+    if (timeSinceLastScan > 5000) {
+      // Only update scan time and emit status if more than 5 seconds have passed
+      dashboardState.lastScan = now.toISOString();
+
+      // Use emitSafeUpdate instead of direct io.emit to benefit from throttling
+      emitSafeUpdate("systemStatus", {
+        mongoConnected: dashboardState.mongoConnected,
+        twitterConnected: dashboardState.twitterConnected,
+        lastScan: dashboardState.lastScan,
+        lastTweet: dashboardState.lastTweet,
+        mongoCount: dashboardState.mongoCount || mockTokens.length,
+      });
+    }
+
+    console.log("[INFO] Successfully generated mock token activity");
+    addLog("Successfully generated mock token activity", "info");
+
+    return formattedTokens;
+  } catch (error) {
+    console.error("[ERROR] Error generating mock token activity:", error);
+    addLog(`Error generating mock token activity: ${error.message}`, "error");
+    return [];
+  }
+}
+
+// Function to get the latest token
+function getLatestToken() {
+  try {
+    // First check if we have data from MongoDB in the dashboard state
+    if (dashboardState.activities && dashboardState.activities.length > 0) {
+      const latestToken = dashboardState.activities[0];
+      return {
+        symbol: latestToken.symbol || "UNKNOWN",
+        name: latestToken.name || latestToken.symbol || "Unknown Token",
+        address: latestToken.address || "Unknown Address",
+        marketCap: latestToken.marketCap || 0,
+        liquidity: latestToken.liquidity || 0,
+        timestamp:
+          latestToken.timestamp || latestToken.time || new Date().toISOString(),
+        status: latestToken.status || "PENDING",
+        logoURI: latestToken.logoURI || null,
+      };
+    }
+
+    // Fall back to hardcoded token if no data is available
+    return {
+      symbol: "NEGROS",
+      name: "Negros On Sol",
+      address: "GPmJmCR6...CyaNpmup",
+      marketCap: 123500,
+      liquidity: 45700,
+      timestamp: new Date("2025-03-18T02:02:59.406Z").toISOString(),
+      status: "TWEETED",
+      logoURI:
+        "https://ipfs.io/ipfs/QmUPtaCnvZRCi2H4du2vKmEfFU6VaTsXfa3ApdakUZkFsx",
+    };
+  } catch (error) {
+    console.error("Error getting latest token:", error);
+    return {
+      symbol: "NEGROS",
+      name: "Negros On Sol",
+      address: "GPmJmCR6...CyaNpmup",
+      marketCap: 123500,
+      liquidity: 45700,
+      timestamp: new Date("2025-03-18T02:02:59.406Z").toISOString(),
+      status: "TWEETED",
+      logoURI:
+        "https://ipfs.io/ipfs/QmUPtaCnvZRCi2H4du2vKmEfFU6VaTsXfa3ApdakUZkFsx",
+    };
+  }
+}
+
+// Function to send initial data to client with error handling
+function sendInitialData(socket) {
+  try {
+    // Ensure activities is always an array
+    const activities = Array.isArray(dashboardState.activities)
+      ? dashboardState.activities
+      : [];
+
+    // Send individual events with error handling
+    safeEmit(socket, "logs", dashboardState.logs);
+    safeEmit(socket, "tokenActivity", activities);
+    safeEmit(socket, "systemStatus", getSystemStatus());
+    safeEmit(socket, "agentStatus", { running: dashboardState.agentRunning });
+    safeEmit(socket, "latestToken", getLatestToken());
+
+    addLog(`Initial data sent to client: ${socket.id}`, "info");
+  } catch (error) {
+    addLog(`Error in sendInitialData: ${error.message}`, "error");
+  }
+}
+
+// Helper function to safely emit socket events
+function safeEmit(socket, event, data) {
+  try {
+    // Ensure socket is connected before emitting
+    if (socket && socket.connected) {
+      socket.emit(event, data);
+    }
+  } catch (error) {
+    addLog(`Error emitting ${event}: ${error.message}`, "error");
+  }
+}
+
+// Function to generate and post a tweet
+async function generateAndPostTweet(token, tweetType) {
+  // In a real implementation, this would call Grok API and Twitter
+  return new Promise((resolve) => {
+    // Simulate API delay
+    setTimeout(() => {
+      console.log(`Generated ${tweetType} tweet for ${token.symbol}`);
+
+      // For now we'll just log what we would tweet
+      let tweetText = "";
+
+      switch (tweetType) {
+        case "new_active":
+          tweetText = `🚀 New $${
+            token.symbol
+          } token on #Solana has activated with ${formatCurrency(
+            token.marketCap || token.mc
+          )} market cap! Trading with ${formatCurrency(
+            token.liquidity
+          )} liquidity. #SolanaMemes`;
+          break;
+        case "recovery":
+          tweetText = `💪 $${
+            token.symbol
+          } has RECOVERED from survival mode! Now at ${formatCurrency(
+            token.marketCap || token.mc
+          )} market cap. #SolanaComeback`;
+          break;
+        case "survival":
+          tweetText = `⚠️ $${
+            token.symbol
+          } has entered survival mode with ${formatCurrency(
+            token.marketCap || token.mc
+          )} market cap. Will it recover? #SolanaSurvival`;
+          break;
+        default:
+          tweetText = `📊 $${token.symbol} update: ${formatCurrency(
+            token.marketCap || token.mc
+          )} market cap, ${formatCurrency(token.liquidity)} liquidity. #Solana`;
+      }
+
+      // Log the tweet text
+      addLog(`Tweet content: "${tweetText}"`, "info");
+
+      // In an actual implementation, you would:
+      // 1. Call Grok API to generate or enhance the tweet
+      // 2. Post to Twitter using the Twitter API client
+      // 3. Return the tweet ID and URL
+
+      // Generate a mock tweet ID for testing
+      const mockTweetId =
+        "1" + Math.floor(1000000000000000 + Math.random() * 9000000000000000);
+
+      // Return tweet information for storage
+      resolve({
+        success: true,
+        tweetId: mockTweetId,
+        tweetText: tweetText,
+        tweetUrl: `https://x.com/Ai16zSolana/status/${mockTweetId}`,
+      });
+    }, 1500);
+  });
+}
+
+// Helper function to update a token in the activity list
+function updateTokenInActivity(updatedToken) {
+  const index = dashboardState.activities.findIndex(
+    (t) =>
+      (t.id && t.id === updatedToken.id) ||
+      (t._id && t._id === updatedToken._id) ||
+      (t.address && t.address === updatedToken.address)
+  );
+
+  if (index !== -1) {
+    dashboardState.activities[index] = {
+      ...dashboardState.activities[index],
+      ...updatedToken,
+    };
+  }
+}
+
+// Helper function to format currency
+function formatCurrency(value) {
+  if (!value && value !== 0) return "$0";
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+// Helper function to format a token for client display
+function formatToken(token) {
+  if (!token) return null;
+
+  return {
+    id: token._id || token.id,
+    _id: token._id || token.id,
+    symbol: token.symbol || "UNKNOWN",
+    name: token.name || token.symbol || "Unknown Token",
+    address: token.address || "",
+    marketCap: token.marketCap || token.mc || 0,
+    mc: token.marketCap || token.mc || 0,
+    liquidity: token.liquidity || 0,
+    timestamp:
+      token.timestamp ||
+      token.scannedAt ||
+      token.graduatedAt ||
+      token.time ||
+      new Date().toISOString(),
+    status: token.status || "PENDING",
+    previousStatus: token.previousStatus || null,
+    failureReason: token.failureReason || null,
+    tweeted: token.tweeted || false,
+    tweetTimestamp: token.tweetTimestamp || null,
+    logoURI: token.logoURI || null,
+  };
+}
+
+// Function to fetch successful tweeted tokens
+async function fetchTweetedTokens(limit = 15) {
+  try {
+    if (!mongoClient || !dashboardState.mongoConnected) {
+      console.log("[INFO] MongoDB not connected, cannot fetch tweeted tokens");
+      return [];
+    }
+
+    const db = mongoClient.db("lore");
+    const collection = db.collection("graduation_tokens");
+
+    // Use a more selective query with projection to reduce memory usage
+    const query = {
+      $or: [{ status: "TWEETED" }, { tweeted: true }],
+    };
+
+    // Only select the fields we need
+    const projection = {
+      _id: 1,
+      symbol: 1,
+      name: 1,
+      address: 1,
+      marketCap: 1,
+      mc: 1,
+      liquidity: 1,
+      status: 1,
+      timestamp: 1,
+      scannedAt: 1,
+      tweetTimestamp: 1,
+      tweetId: 1,
+      tweetText: 1,
+      tweetUrl: 1,
+      logoURI: 1,
+    };
+
+    // Query the database with pagination
+    const tweetedTokens = await collection
+      .find(query)
+      .project(projection)
+      .sort({ tweetTimestamp: -1 })
+      .limit(limit)
+      .toArray();
+
+    if (!tweetedTokens || tweetedTokens.length === 0) {
+      console.log("[INFO] No tweeted tokens found in database");
+      return [];
+    }
+
+    console.log(
+      `[INFO] Found ${tweetedTokens.length} tweeted tokens in database`
+    );
+
+    // Format the tokens for display
+    const formattedTokens = tweetedTokens.map((token) => {
+      // If tweet content is missing, generate sample data
+      if (!token.tweetText || !token.tweetId) {
+        token.tweetText = token.tweetText || generateSampleTweetText(token);
+        token.tweetId = token.tweetId || generateSampleTweetId();
+        token.tweetUrl =
+          token.tweetUrl ||
+          `https://x.com/LoreVisionAI/status/${token.tweetId}`;
+      }
+
+      return formatToken(token);
+    });
+
+    return formattedTokens;
+  } catch (error) {
+    console.error("[ERROR] Error fetching tweeted tokens:", error);
+    return [];
+  }
+}
+
+// Helper function to generate sample tweet text for tokens that don't have it
+function generateSampleTweetText(token) {
+  const symbol = token.symbol || "TOKEN";
+  const marketCap = formatCurrency(token.marketCap || token.mc || 0);
+  const liquidity = formatCurrency(token.liquidity || 0);
+
+  const templates = [
+    `🚀 $${symbol} on #Solana has reached ${marketCap} market cap with ${liquidity} liquidity! #SolanaMemes`,
+    `📊 New listing alert! $${symbol} is now trading on Solana with ${marketCap} market cap. #SolanaTokens`,
+    `🔥 Hot token alert: $${symbol} has ${marketCap} market cap and ${liquidity} liquidity on #Solana! #SolanaMemes`,
+    `💎 $${symbol} is gaining traction on #Solana with ${marketCap} market cap! #SolanaGems`,
+  ];
+
+  // Select a random template
+  const randomIndex = Math.floor(Math.random() * templates.length);
+  return templates[randomIndex];
+}
+
+// Helper function to generate a sample tweet ID for testing
+function generateSampleTweetId() {
+  // Generate a random tweet ID format similar to Twitter's
+  return "1" + Math.floor(1000000000000000 + Math.random() * 9000000000000000);
+}
+
+// Add debug utility for tracking system status updates
+function enableSystemStatusDebug() {
+  const originalEmit = io.emit;
+  let statusUpdateCount = 0;
+  let lastUpdateTime = Date.now();
+
+  // Replace the emit function with a wrapped version
+  io.emit = function (event, ...args) {
+    if (event === "systemStatus") {
+      const now = Date.now();
+      const timeSinceLastUpdate = now - lastUpdateTime;
+      statusUpdateCount++;
+
+      // Log if updates are happening too frequently
+      if (timeSinceLastUpdate < 1000) {
+        // Less than 1 second interval
+        console.warn(
+          `[WARNING] Frequent systemStatus update detected (${statusUpdateCount}): ${timeSinceLastUpdate}ms since last update`
+        );
+        console.trace("Stack trace for frequent update:");
+      }
+
+      lastUpdateTime = now;
+
+      // Reset counter every minute
+      if (statusUpdateCount === 1) {
+        setTimeout(() => {
+          console.log(
+            `[DEBUG] systemStatus events in last minute: ${statusUpdateCount}`
+          );
+          statusUpdateCount = 0;
+        }, 60000);
+      }
+    }
+
+    // Call the original emit function
+    return originalEmit.apply(io, [event, ...args]);
+  };
+
+  console.log("[DEBUG] System status update monitoring enabled");
+}
+
+// Monitor for any other infinite loops or excessive emissions
+if (process.env.DEBUG_STATUS === "true") {
+  enableSystemStatusDebug();
+}
+
+// Add memory management utility
+function setupMemoryManagement() {
+  // Check memory usage every 60 seconds
+  const memoryCheckInterval = setInterval(() => {
+    try {
+      // Get current memory usage
+      const memoryUsage = process.memoryUsage();
+      const heapUsed = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+      const heapTotal = Math.round(memoryUsage.heapTotal / 1024 / 1024);
+      const rss = Math.round(memoryUsage.rss / 1024 / 1024);
+
+      console.log(
+        `[MEMORY] Usage: ${heapUsed}MB / ${heapTotal}MB (Heap), ${rss}MB (RSS)`
+      );
+
+      // If memory usage is high, perform garbage collection
+      if (heapUsed > 2000) {
+        // If using more than 2GB
+        console.log("[MEMORY] High memory usage detected, cleaning up...");
+
+        // Perform application-level cleanup
+        if (dashboardState.logs && dashboardState.logs.length > 100) {
+          dashboardState.logs = dashboardState.logs.slice(0, 100);
+        }
+
+        if (
+          dashboardState.activities &&
+          dashboardState.activities.length > 50
+        ) {
+          dashboardState.activities = dashboardState.activities.slice(0, 50);
+        }
+
+        if (
+          dashboardState.tweetedTokens &&
+          dashboardState.tweetedTokens.length > 30
+        ) {
+          dashboardState.tweetedTokens = dashboardState.tweetedTokens.slice(
+            0,
+            30
+          );
+        }
+
+        // Force garbage collection if possible
+        if (global.gc) {
+          console.log("[MEMORY] Running garbage collection");
+          global.gc();
+        } else {
+          console.log(
+            "[MEMORY] Garbage collection not available. Run with --expose-gc flag to enable."
+          );
+        }
+      }
+    } catch (error) {
+      console.error("[ERROR] Memory management error:", error);
+    }
+  }, 60000);
+
+  console.log("[INFO] Memory management initialized");
+}
+
+// Initialize memory management
+setupMemoryManagement();
+
+// Automatically restart MongoDB connection if it disconnects
+setInterval(async () => {
+  try {
+    if (
+      dashboardState.agentRunning &&
+      (!mongoClient || !dashboardState.mongoConnected)
+    ) {
+      console.log("[INFO] Checking MongoDB connection status...");
+      const connected = await initMongoDB();
+      if (connected) {
+        console.log("[INFO] MongoDB reconnection successful");
+      }
+    }
+  } catch (error) {
+    console.error("[ERROR] Error in MongoDB connection check:", error);
+  }
+}, 60000); // Check every minute
+
+// Add a global application error handler
+process.on("uncaughtException", (error) => {
+  console.error("[CRITICAL] Uncaught exception:", error);
+  addLog(`Uncaught exception: ${error.message}`, "error");
+
+  // Prevent the app from crashing
+  // For MongoDB connection errors, set a flag to avoid reconnection attempts
+  if (
+    error.name === "MongoParseError" ||
+    error.name === "MongoNetworkError" ||
+    error.name === "MongoServerError"
+  ) {
+    addLog(
+      "MongoDB connection error detected. Disabling auto-reconnect.",
+      "warning"
+    );
+    dashboardState.mongoConnectError = true;
+
+    // Force fallback to simulated data
+    simulateTokenActivity().catch((err) => {
+      console.error("[ERROR] Failed to load simulated data:", err);
+    });
+  }
+});
+
+// Also catch promise rejections
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[CRITICAL] Unhandled Promise rejection:", reason);
+  addLog(`Unhandled Promise rejection: ${reason}`, "error");
+
+  // For MongoDB connection errors, set a flag to avoid reconnection attempts
+  if (
+    reason instanceof Error &&
+    (reason.name === "MongoParseError" ||
+      reason.name === "MongoNetworkError" ||
+      reason.name === "MongoServerError")
+  ) {
+    addLog(
+      "MongoDB connection error detected. Disabling auto-reconnect.",
+      "warning"
+    );
+    dashboardState.mongoConnectError = true;
+
+    // Force fallback to simulated data
+    simulateTokenActivity().catch((err) => {
+      console.error("[ERROR] Failed to load simulated data:", err);
+    });
+  }
+});

@@ -1,0 +1,33 @@
+{
+  "name": "lorevision-dashboard",
+  "version": "1.0.0",
+  "description": "Dashboard for LoreVision Solana Memecoin Analysis",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "solana",
+    "memecoin",
+    "dashboard",
+    "cryptocurrency"
+  ],
+  "author": "LoreVision",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mongodb": "^6.4.0",
+    "openai": "^4.91.1",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.21"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "private": true
+}
